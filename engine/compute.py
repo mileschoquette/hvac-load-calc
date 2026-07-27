@@ -74,10 +74,12 @@ def _type_map(lst):
     return {t["name"]: t for t in (lst or []) if isinstance(t, dict) and "name" in t}
 
 
-def compute_building(review, types=None, weather=None, month=8):
-    """review = parsed rooms_edited.json dict; types = loadcalc_input.json dict;
-    weather = {cooling_db, daily_range, lat, lon, std_meridian, tau_b, tau_d,
-    indoor_db, indoor_grains, outdoor_grains}. Returns a results dict."""
+def compute_building(review, weather=None, month=8):
+    """review = parsed rooms_edited.json dict — rooms plus wall/roof/floor/glass/
+    door type libraries, safety_factors, and project_settings, everything
+    buildPayload() saves. weather = {cooling_db, daily_range, lat, lon,
+    std_meridian, tau_b, tau_d, indoor_db, indoor_grains, outdoor_grains}.
+    Returns a results dict."""
     ppf = review.get("pxPerFt", 18.0)
     wtypes = _type_map(review.get("wall_types"))
     rtypes = _type_map(review.get("roof_types"))

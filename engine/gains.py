@@ -2,8 +2,9 @@
 
 Each returns a 24-hour sensible heat-gain profile (magnitude x hourly schedule
 fraction) that Stage 6 (rts.cooling_load) turns into a cooling load using the
-gain's radiant fraction. People and (optionally) equipment also add latent gain,
-which is an instantaneous latent cooling load (no RTS).
+gain's radiant fraction. People/equipment latent gain is NOT computed here —
+it's an instantaneous load (no RTS, no 24-hour profile), so compute.py adds it
+directly as a scalar (occupants x 200 Btu/h/person, plus equipment.latent_btuh).
 """
 from __future__ import annotations
 
@@ -16,10 +17,6 @@ def _profile(magnitude, schedule):
 
 def people_sensible(n, sensible_per_person, schedule):
     return _profile(n * sensible_per_person, schedule)
-
-
-def people_latent(n, latent_per_person, schedule):
-    return _profile(n * latent_per_person, schedule)
 
 
 def lighting(watts, schedule, space_fraction=1.0):

@@ -59,7 +59,7 @@ def ext_coords(g, rm):
 def export(pdf, ppf, min_len=1.0, page_no=0, out="review.html"):
     raw = extract_page(pdf, page_no)
     walls = detect_walls(raw["lines"], ppf, min_len_ft=min_len)
-    rooms = build_room_polygons(walls, ppf, curves=raw["curves"])
+    rooms = build_room_polygons(walls, ppf)
 
     doc = fitz.open(pdf)
     page = doc[page_no]

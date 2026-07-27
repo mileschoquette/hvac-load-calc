@@ -170,7 +170,7 @@ def _run_calc(review):
     tj = {**tj, "project_settings": merged_ps}
     w = _weather(tj)
     month = w.pop("month", 8)
-    result = compute_building(review, tj, w, month=month)
+    result = compute_building(review, w, month=month)
     plan_uri = None
     p = ROOT / "plan.png"
     if p.exists():
@@ -416,9 +416,18 @@ def app_cmd():
                     "types the first time, or a saved rooms_edited.json to resume).")
 
 
+def _load_types(types):
+    """Copy a types JSON into the project's loadcalc_input.json, unless it's
+    already that exact file — shutil.copy raises SameFileError otherwise (a
+    real crash if someone re-passes the file already sitting in this folder)."""
+    dest = ROOT / "loadcalc_input.json"
+    if Path(types).resolve() != dest.resolve():
+        shutil.copy(types, dest)
+
+
 def parse_cmd(pdf, types=None, ppf=18.0, min_len=1.0, page=0):
     if types:
-        shutil.copy(types, ROOT / "loadcalc_input.json")   # review UI auto-loads this
+        _load_types(types)   # review UI auto-loads this
         print(f"loaded types from {types}")
     export_review.export(pdf, ppf, min_len, page)           # writes review.html (auto-loads types)
     # save the plan image for the results report's evidence
@@ -433,7 +442,7 @@ def parse_cmd(pdf, types=None, ppf=18.0, min_len=1.0, page=0):
 
 def resume_cmd(rooms_edited, types=None):
     if types:
-        shutil.copy(types, ROOT / "loadcalc_input.json")
+        _load_types(types)
         print(f"loaded types from {types}")
     export_review.resume(rooms_edited)   # reuses review.html's plan image, overlays saved rooms/openings/types
     _serve_and_wait()
@@ -442,7 +451,7 @@ def resume_cmd(rooms_edited, types=None):
 def calc_cmd(rooms_edited, types=None):
     review = json.loads(Path(rooms_edited).read_text())
     if types:
-        shutil.copy(types, ROOT / "loadcalc_input.json")
+        _load_types(types)
     result = _run_calc(review)
     b = result["building"]
     print(f"wrote results.html  ->  {b['tons']:.1f} tons  ({b['total_btuh']:,.0f} Btu/h, "
