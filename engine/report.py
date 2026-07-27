@@ -146,15 +146,18 @@ def _ventilation_schedule(vs):
 
 
 def _room_info(rooms):
-    cols = ["Number", "Type", "Area", "Ceiling Ht.", "Floor-to-Floor", "Occupants",
-            "Lighting", "Equipment", "Equip. Latent", "Ventilation", "Infiltration", "Exhaust",
-            "Cooling / Heating SP", "RH"]
+    show_floor = any(r.get("floor_label") for r in rooms)
+    cols = (["Number"] + (["Floor"] if show_floor else [])
+            + ["Type", "Area", "Ceiling Ht.", "Floor-to-Floor", "Occupants",
+               "Lighting", "Equipment", "Equip. Latent", "Ventilation", "Infiltration", "Exhaust",
+               "Cooling / Heating SP", "RH"])
     rows = ""
     for r in rooms:
         L = r["loads"]
         exh = f"{_num(L.get('exh_cfm'))} CFM ({_num(L.get('makeup_pct')) if L.get('exh_cfm') else '—'}% OA)" \
               if L.get("exh_cfm") else "—"
-        rows += ("<tr>" + _td(r["label"], False) + _td(r["type"] or "—", False)
+        rows += ("<tr>" + _td(r["label"], False) + (_td(r.get("floor_label") or "—", False) if show_floor else "")
+                  + _td(r["type"] or "—", False)
                   + _td(f"{r['area_sqft']:,.0f} ft²") + _td(_ft_in(r["ceiling_ft"]))
                   + _td(_ft_in(r.get("floor_to_floor_ft")) if r.get("floor_to_floor_ft") else "same")
                   + _td(_num(L.get("occupants"))) + _td(f"{_num(L.get('lpd'), 2)} W/ft²")
@@ -314,6 +317,14 @@ def render_report(result, project_name="", plan_datauri=None, generated=""):
             "tons) reflects when THAT zone's rooms collectively peak, which may differ from any single "
             "room's peak or the whole building's. Use this for per-AHU/per-RTU equipment sizing.")
 
+    floors_section = ""
+    if result.get("floors"):
+        floors_section = _load_summary(
+            "Load Total Summary — Floors", result["floors"],
+            "Each floor is its own block load, same reasoning as a zone (and the same pattern the golden-"
+            "building calibration validated against ASHRAE's own AHU-1/AHU-2 first-floor/second-floor "
+            "example) — a floor's peak hour may differ from any single room's or the whole building's.")
+
     plan = (f"<table><thead><tr><th class='mainHeader'>Reviewed Floor Plan</th></tr></thead>"
             f"<tr><td class='otherData' style='text-align:center'>"
             f"<img src='{plan_datauri}' style='max-width:100%'></td></tr></table>") if plan_datauri else ""
@@ -339,6 +350,7 @@ def render_report(result, project_name="", plan_datauri=None, generated=""):
         _heating_detail(rooms, d["heating_db"]),
         _load_summary("Load Total Summary — Room (Building)", building_row),
         zones_section,
+        floors_section,
         air_balance_section,
         plan,
     ]

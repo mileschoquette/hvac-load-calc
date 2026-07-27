@@ -80,7 +80,12 @@ def compute_building(review, weather=None, month=8):
     buildPayload() saves. weather = {cooling_db, daily_range, lat, lon,
     std_meridian, tau_b, tau_d, indoor_db, indoor_grains, outdoor_grains}.
     Returns a results dict."""
-    ppf = review.get("pxPerFt", 18.0)
+    # Scale (px/ft) is now per-floor (different sheets in a multi-page plan set can be
+    # drawn at different scales) — buildPayload() stores it in `floors`, keyed by the
+    # `level` each room is tagged with. review.get("pxPerFt") is the pre-multi-floor
+    # fallback for an old saved file that predates the `floors` key entirely.
+    ppf_by_level = {f["level"]: f.get("pxPerFt", 18.0) for f in review.get("floors", [])}
+    default_ppf = review.get("pxPerFt", 18.0)
     wtypes = _type_map(review.get("wall_types"))
     rtypes = _type_map(review.get("roof_types"))
     gtypes = _type_map(review.get("glass_types"))
@@ -135,6 +140,13 @@ def compute_building(review, weather=None, month=8):
 
     any_zoned = any(r.get("zone") for r in review.get("rooms", []))
     zone_acc = {}   # zone name -> {room24, latent, area, count} — only populated if any_zoned
+    # Per-floor subtotals — the exact AHU-1/AHU-2 first-floor/second-floor pattern the
+    # golden-building calibration already validated (a floor is its own block load, with
+    # its own peak hour, same reasoning as a zone). Only surfaced when there's more than
+    # one floor, same as zones only surfacing when a room actually has one assigned.
+    floor_labels = {f["level"]: f.get("label", f"Floor {f['level']}") for f in review.get("floors", [])}
+    any_multifloor = len(floor_labels) > 1
+    floor_acc = {}   # level -> {room24, latent, area, count, htg} — only populated if any_multifloor
     envelope = []   # every wall/roof/window/door instance — for a DM-style "Types"/"Usage" report
     air_rooms = []  # per-room air-balance rows (ventilation/exhaust/makeup CFM) — see result["air_balance"]
     vent_rows = []  # per-room ASHRAE 62.1 / FBC Mechanical ventilation-rate rows — see result["ventilation_schedule"]
@@ -144,6 +156,7 @@ def compute_building(review, weather=None, month=8):
     bldg_htg = 0.0
     for r in review.get("rooms", []):
         pts = r["points"]
+        ppf = ppf_by_level.get(r.get("level", 1), default_ppf)
         h = r.get("ceiling_ft") or 9.0
         wall_h = r.get("floor_to_floor_ft") or h   # exterior walls run to the structure
         # above, not just the dropped ceiling — falls back to ceiling height when
@@ -432,7 +445,9 @@ def compute_building(review, weather=None, month=8):
         peak_hr = max(range(24), key=lambda k: room24[k])
         rooms_out.append({
             "id": r["id"], "label": r.get("label", ""), "type": r.get("type", ""),
-            "zone": r.get("zone", ""), "area_sqft": round(area, 1), "ceiling_ft": h,
+            "zone": r.get("zone", ""),
+            "floor_label": floor_labels.get(r.get("level", 1), "") if any_multifloor else "",
+            "area_sqft": round(area, 1), "ceiling_ft": h,
             "floor_to_floor_ft": r.get("floor_to_floor_ft") or None,
             "sensible_btuh": round(room24[peak_hr], 0),
             "latent_btuh": round(latent, 0),
@@ -463,6 +478,15 @@ def compute_building(review, weather=None, month=8):
             z["count"] += 1
             z["htg"] += room_htg
 
+        if any_multifloor:
+            fl = floor_acc.setdefault(r.get("level", 1),
+                                      {"room24": [0.0] * 24, "latent": 0.0, "area": 0.0, "count": 0, "htg": 0.0})
+            fl["room24"] = [fl["room24"][k] + room24[k] for k in range(24)]
+            fl["latent"] += latent
+            fl["area"] += area
+            fl["count"] += 1
+            fl["htg"] += room_htg
+
     peak_hr = max(range(24), key=lambda k: bldg24[k])
     sens = bldg24[peak_hr]
     total = sens + bldg_latent
@@ -480,6 +504,21 @@ def compute_building(review, weather=None, month=8):
                 "sensible_btuh": round(zsens, 0), "latent_btuh": round(z["latent"], 0),
                 "total_btuh": round(ztotal, 0), "tons": round(ztotal / 12000.0, 1),
                 "peak_hour": zpk + 1, "heating_btuh": round(z["htg"], 0),
+            })
+
+    floors_out = None
+    if any_multifloor:
+        floors_out = []
+        for level, fl in sorted(floor_acc.items()):
+            fpk = max(range(24), key=lambda k: fl["room24"][k])
+            fsens = fl["room24"][fpk]
+            ftotal = fsens + fl["latent"]
+            floors_out.append({
+                "name": floor_labels.get(level, f"Floor {level}"), "room_count": fl["count"],
+                "area_sqft": round(fl["area"], 0),
+                "sensible_btuh": round(fsens, 0), "latent_btuh": round(fl["latent"], 0),
+                "total_btuh": round(ftotal, 0), "tons": round(ftotal / 12000.0, 1),
+                "peak_hour": fpk + 1, "heating_btuh": round(fl["htg"], 0),
             })
 
     # Air balance — building must never take in less outdoor air than it
@@ -550,4 +589,6 @@ def compute_building(review, weather=None, month=8):
     }
     if zones_out is not None:
         result["zones"] = zones_out
+    if floors_out is not None:
+        result["floors"] = floors_out
     return result

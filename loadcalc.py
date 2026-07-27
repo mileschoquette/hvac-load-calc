@@ -14,6 +14,12 @@
              Calc" buttons can write files and trigger the calc directly.
        python3 loadcalc.py parse "plans.pdf" [types.json] [px_per_ft] [min_len_ft] [page]
 
+             Multi-floor plan set (one page per floor, page 1 = floor 1, etc):
+             pass a comma-separated page list, e.g. page="0,1,2" for a 3-floor
+             set. px_per_ft can likewise be a comma list matching the pages (one
+             scale per floor) or a single value applied to all of them.
+       python3 loadcalc.py parse "plans.pdf" [types.json] "18,18" 1.0 "0,1"
+
   2) resume: reopen a previously saved rooms_edited.json in the review UI to
              keep editing where you left off — reuses the plan image from the
              last parse, no need to re-parse the PDF.
@@ -203,13 +209,15 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
         else:
             (ROOT / "loadcalc_input.json").write_text(json_text)
 
-    export_review.export(str(pdf_path), ppf, min_len, page)
+    pages = _parse_pages_arg(page)
+    ppfs = _parse_ppf_arg(ppf, len(pages))
+    export_review.export(str(pdf_path), ppfs, min_len, pages)
     if resumed:
         export_review.resume(str(ROOT / "rooms_edited.json"))
 
     try:
         import fitz
-        pg = fitz.open(str(pdf_path))[page]
+        pg = fitz.open(str(pdf_path))[pages[0]]
         pg.get_pixmap(matrix=fitz.Matrix(0.7, 0.7)).save(str(ROOT / "plan.png"))
     except Exception:
         pass
@@ -256,12 +264,12 @@ APP_HTML = r"""<!doctype html>
     </div>
     <input type="file" id="fPdf" accept="application/pdf" style="display:none">
     <input type="file" id="fJson" accept="application/json" style="display:none">
-    <label class="fld">Drawing scale (pixels per foot)</label>
-    <input type="number" id="ppf" value="18" step="0.1" min="1">
+    <label class="fld">Drawing scale (pixels per foot) — one value, or comma-separated per floor</label>
+    <input type="text" id="ppf" value="18">
     <details>
       <summary>Advanced</summary>
       <div class="row">
-        <div><label class="fld">Page number</label><input type="number" id="page" value="0" step="1" min="0"></div>
+        <div><label class="fld">Page number(s) — e.g. "0,1,2" if one page per floor</label><input type="text" id="page" value="0"></div>
         <div><label class="fld">Min wall length (ft)</label><input type="number" id="minLen" value="1.0" step="0.1" min="0"></div>
       </div>
     </details>
@@ -295,8 +303,8 @@ document.getElementById('bStart').onclick=async()=>{
     const payload={
       pdf_b64: dataUrl.split(',')[1], pdf_name: pdfFile.name,
       json_text: jsonFile ? await readText(jsonFile) : null,
-      ppf: parseFloat(document.getElementById('ppf').value)||18,
-      page: parseInt(document.getElementById('page').value)||0,
+      ppf: document.getElementById('ppf').value || '18',
+      page: document.getElementById('page').value || '0',
       min_len: parseFloat(document.getElementById('minLen').value)||1.0
     };
     const res=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -352,8 +360,8 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                 req = json.loads(raw)
                 resumed = _start_project(
                     base64.b64decode(req["pdf_b64"]), req.get("pdf_name"),
-                    req.get("json_text"), float(req.get("ppf") or 18.0),
-                    float(req.get("min_len") or 1.0), int(req.get("page") or 0))
+                    req.get("json_text"), req.get("ppf") or "18.0",
+                    float(req.get("min_len") or 1.0), req.get("page") or "0")
             except Exception as e:
                 self._json({"ok": False, "error": str(e)}, 500)
                 return
@@ -425,15 +433,36 @@ def _load_types(types):
         shutil.copy(types, dest)
 
 
+def _parse_pages_arg(page_arg):
+    """CLI/browser page argument: a single int, or comma-separated page numbers —
+    one per building floor (e.g. "0,1,2" for a 3-floor plan set, page 1 = floor 1,
+    page 2 = floor 2, etc — the common case of one multi-page plan set export)."""
+    if isinstance(page_arg, int):
+        return (page_arg,)
+    return tuple(int(x) for x in str(page_arg).split(","))
+
+
+def _parse_ppf_arg(ppf_arg, n_pages):
+    """CLI/browser ppf argument: a single number (applied to every floor), or
+    comma-separated numbers matching the page count — different sheets are
+    sometimes drawn at different scales."""
+    if isinstance(ppf_arg, (int, float)):
+        return [float(ppf_arg)] * n_pages
+    parts = [float(x) for x in str(ppf_arg).split(",")]
+    return parts if len(parts) > 1 else parts * n_pages
+
+
 def parse_cmd(pdf, types=None, ppf=18.0, min_len=1.0, page=0):
     if types:
         _load_types(types)   # review UI auto-loads this
         print(f"loaded types from {types}")
-    export_review.export(pdf, ppf, min_len, page)           # writes review.html (auto-loads types)
-    # save the plan image for the results report's evidence
+    pages = _parse_pages_arg(page)
+    ppfs = _parse_ppf_arg(ppf, len(pages))
+    export_review.export(pdf, ppfs, min_len, pages)         # writes review.html (auto-loads types)
+    # save floor 1's plan image for the results report's evidence
     try:
         import fitz
-        pg = fitz.open(pdf)[page]
+        pg = fitz.open(pdf)[pages[0]]
         pg.get_pixmap(matrix=fitz.Matrix(0.7, 0.7)).save(str(ROOT / "plan.png"))
     except Exception:
         pass
@@ -467,10 +496,14 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(0)
     elif a[0] == "parse":
+        # ppf/page are left as raw strings (not pre-cast to float/int) so a
+        # comma-separated multi-floor list ("18,18" / "0,1") can pass through —
+        # parse_cmd's _parse_ppf_arg/_parse_pages_arg handle both single and
+        # comma-list forms.
         parse_cmd(a[1], a[2] if len(a) > 2 else None,
-                  float(a[3]) if len(a) > 3 else 18.0,
+                  a[3] if len(a) > 3 else 18.0,
                   float(a[4]) if len(a) > 4 else 1.0,
-                  int(a[5]) if len(a) > 5 else 0)
+                  a[5] if len(a) > 5 else 0)
     elif a[0] == "resume":
         resume_cmd(a[1], a[2] if len(a) > 2 else None)
     else:

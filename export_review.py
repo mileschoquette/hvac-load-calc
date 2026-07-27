@@ -56,27 +56,49 @@ def ext_coords(g, rm):
     return pts
 
 
-def export(pdf, ppf, min_len=1.0, page_no=0, out="review.html"):
-    raw = extract_page(pdf, page_no)
-    walls = detect_walls(raw["lines"], ppf, min_len_ft=min_len)
-    rooms = build_room_polygons(walls, ppf)
+def export(pdf, ppf, min_len=1.0, pages=(0,), out="review.html", labels=None):
+    """pages = one page number per building floor (page 1 = floor 1, page 2 = floor
+    2, etc — the common case of one multi-page plan set). A bare int is also
+    accepted for the single-floor case. ppf is either one number (applied to every
+    floor) or a list matching `pages`, since different sheets can be drawn at
+    different scales. Each floor gets its own rooms/openings/scale/north in the
+    review UI; `rooms`/`openings` in the saved JSON stay flat lists (each room
+    tagged with its `level`) so engine/compute.py can sum across floors the same
+    way it already does across zones."""
+    if isinstance(pages, int):
+        pages = (pages,)
+    ppfs = list(ppf) if isinstance(ppf, (list, tuple)) else [ppf] * len(pages)
+    if len(ppfs) != len(pages):
+        raise ValueError(f"got {len(ppfs)} ppf values for {len(pages)} pages — "
+                         "pass one ppf for all floors, or one per page")
+    labels = list(labels) if labels else [f"Floor {i + 1}" for i in range(len(pages))]
 
+    floors, rdata, next_id = [], [], 0
     doc = fitz.open(pdf)
-    page = doc[page_no]
-    pix = page.get_pixmap(matrix=fitz.Matrix(1, 1))
-    img_uri = "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
-    pageW, pageH = page.rect.width, page.rect.height
-    rm = page.rotation_matrix
-    doc.close()
+    for i, (page_no, page_ppf, label) in enumerate(zip(pages, ppfs, labels)):
+        level = i + 1
+        raw = extract_page(pdf, page_no)
+        walls = detect_walls(raw["lines"], page_ppf, min_len_ft=min_len)
+        rooms = build_room_polygons(walls, page_ppf)
 
-    rdata = [{"id": i, "label": f"ROOM {i}", "type": "", "points": ext_coords(g, rm)}
-             for i, g in enumerate(sorted(rooms, key=lambda r: -r.area))]
+        page = doc[page_no]
+        pix = page.get_pixmap(matrix=fitz.Matrix(1, 1))
+        img_uri = "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
+        rm = page.rotation_matrix
+
+        for g in sorted(rooms, key=lambda r: -r.area):
+            rdata.append({"id": next_id, "label": f"ROOM {next_id}", "type": "",
+                          "level": level, "points": ext_coords(g, rm)})
+            next_id += 1
+        floors.append({"level": level, "label": label, "image": img_uri,
+                       "pageW": page.rect.width, "pageH": page.rect.height,
+                       "pxPerFt": page_ppf, "north_deg": 0})
+    doc.close()
 
     # Carried through to buildPayload() -> the saved JSON's filename, so the site's
     # "Save JSON" / "Run Load Calc" output is named after the PDF instead of always
     # clobbering a fixed rooms_edited.json across different projects.
-    data = {"image": img_uri, "pageW": pageW, "pageH": pageH,
-            "pxPerFt": ppf, "rooms": rdata, "pdf_stem": Path(pdf).stem}
+    data = {"floors": floors, "rooms": rdata, "pdf_stem": Path(pdf).stem}
 
     # Pull in a types file (room/wall/roof/... definitions) if the site's JSON
     # was dropped in the folder — this fills the dropdowns + seeds room loads.
@@ -113,14 +135,45 @@ def resume(rooms_edited_path, existing_html="review.html", out="review.html"):
     base = json.loads(m.group(1))
 
     saved = json.loads(Path(rooms_edited_path).read_text())
-    data = {"image": base["image"], "pageW": base["pageW"], "pageH": base["pageH"]}
-    for k in ("pxPerFt", "rooms", "openings", "wall_types", "roof_types",
-              "floor_types", "glass_types", "door_types", "room_types", "zones", "north_deg",
+
+    # Floors: the plan image/page size only ever live in `base` (the last parse's
+    # embedded review.html) — buildPayload() never saves images, to keep
+    # rooms_edited.json lean. So merge per floor: image/pageW/pageH always from
+    # base, but pxPerFt/label/north_deg prefer whatever the engineer saved (their
+    # scale-match / North-arrow edits), matched up by `level`.
+    base_floors = {f["level"]: f for f in base.get("floors", [])}
+    if "floors" in saved:
+        data = {"floors": [
+            {"level": sf["level"],
+             "label": sf.get("label", base_floors.get(sf["level"], {}).get("label", f"Floor {sf['level']}")),
+             "image": base_floors.get(sf["level"], {}).get("image"),
+             "pageW": base_floors.get(sf["level"], {}).get("pageW"),
+             "pageH": base_floors.get(sf["level"], {}).get("pageH"),
+             "pxPerFt": sf.get("pxPerFt"), "north_deg": sf.get("north_deg", 0)}
+            for sf in saved["floors"]]}
+    elif base.get("floors"):
+        data = {"floors": base["floors"]}
+    else:
+        # Both sides predate multi-floor — synthesize a single Floor 1 from the old
+        # flat image/pxPerFt/north_deg fields.
+        data = {"floors": [{"level": 1, "label": "Floor 1",
+                            "image": base.get("image"), "pageW": base.get("pageW"), "pageH": base.get("pageH"),
+                            "pxPerFt": saved.get("pxPerFt", base.get("pxPerFt")),
+                            "north_deg": saved.get("north_deg", base.get("north_deg", 0))}]}
+
+    for k in ("rooms", "openings", "wall_types", "roof_types",
+              "floor_types", "glass_types", "door_types", "room_types", "zones",
               "safety_factors", "project_settings", "pdf_stem"):
         if k in saved:
             data[k] = saved[k]
         elif k in base:
             data[k] = base[k]
+
+    # A room saved before multi-floor existed has no `level` at all — it belongs
+    # to (the only) Floor 1.
+    if "rooms" in data:
+        for r in data["rooms"]:
+            r.setdefault("level", 1)
 
     # room_types saved before the fix for the seedLoads/RT_REC bug are bare name
     # strings, not the full DM record (lighting/equipment/people/etc.) that loads
@@ -202,6 +255,7 @@ HTML = r"""<!doctype html>
   .loadgrid input { padding:5px 6px; }
   #bar .north { font-size:12px; color:#cbd5e1; }
   #bar .north input { width:52px; padding:4px; border:0; border-radius:5px; margin-left:2px; }
+  #bar .north select { padding:4px; border:0; border-radius:5px; margin-left:2px; }
   .walls-list { margin:10px 0; font-size:11.5px; }
   .walls-list .wl-h { color:#6b7280; margin-bottom:3px; }
   .walls-list .wl-row { display:grid; grid-template-columns:36px 1fr 52px; gap:6px; padding:2px 0; border-top:1px solid #f1f5f9; }
@@ -209,12 +263,13 @@ HTML = r"""<!doctype html>
 <body><div id="app">
   <div id="bar">
     <b>Room Review</b>
+    <span class="north" title="Switch which floor's plan you're viewing/editing. Each floor keeps its own rooms, drawing scale, and North setting.">Floor <select id="bFloor"></select></span>
     <button id="bAdd">+ Add Room</button>
     <button id="bDel">Delete</button>
     <button id="bFit">Fit</button>
     <button id="bMeasure">📏 Measure</button>
     <span class="north">North° <input id="bNorth" type="number" step="1" value="0"></span>
-    <span class="north" title="Recalibrates the drawing scale so the rooms drawn so far add up to this — enter the building's actual total square footage, not a guess.">Total ft² <input id="bTotalSqft" type="number" step="1" placeholder="e.g. 12500"></span>
+    <span class="north" title="Recalibrates THIS FLOOR's drawing scale so its rooms drawn so far add up to this — enter this floor's actual total square footage, not a guess.">Total ft² <input id="bTotalSqft" type="number" step="1" placeholder="e.g. 12500"></span>
     <button id="bMatchSqft">Match</button>
     <span class="north" title="Design margin on top of the calculated loads, project-wide. Room = envelope + internal gains; Vent = ventilation/infiltration/exhaust-makeup outdoor air — tracked separately since DM's own report does. Defaults (5/0/10/0%) are pre-filled with a rationale footnoted on the results report; edit here to override for this project.">SF% Clg Room <input id="bSfClgRoom" type="number" step="1" value="5"> Clg Vent <input id="bSfClgVent" type="number" step="1" value="0"> Htg Room <input id="bSfHtgRoom" type="number" step="1" value="10"> Htg Vent <input id="bSfHtgVent" type="number" step="1" value="0"></span>
     <button id="bSave">Save JSON</button>
@@ -232,19 +287,50 @@ HTML = r"""<!doctype html>
 <script>const REVIEW_DATA = /*__DATA__*/;</script>
 <script>
 const D = REVIEW_DATA;
-let PPF = D.pxPerFt;   // reassignable — "Match total ft²" recalibrates this after drawing
 const PDF_STEM = D.pdf_stem || null;   // the dropped PDF's filename (no extension) — names the saved JSON after it
-let rooms = D.rooms.map(r => ({id:r.id, label:r.label, type:r.type||"", zone:r.zone||"", points:r.points.map(p=>[p[0],p[1]]),
+
+// ── Multi-floor state ────────────────────────────────────────────────────────
+// Each floor keeps its own plan image/scale/north AND its own rooms/openings.
+// `rooms`/`openings`/`PPF`/`northDeg` (below) are always THE ACTIVE FLOOR'S live,
+// mutable working copies — every existing selection/paint/drag/measure/draw
+// function in this file reads/writes those same names exactly as it did back when
+// there was only ever one floor, completely unmodified. switchFloor() just stashes
+// the outgoing floor's copies into floorRoomsMap/floorOpeningsMap and loads the
+// incoming floor's — a "swap the working set" pattern instead of threading a floor
+// filter through every interaction/hit-test in the file (which is where an invisible
+// other-floor room could accidentally get clicked/painted if pixel coordinates from
+// two different page scales happened to overlap).
+let floorMeta = (D.floors && D.floors.length ? D.floors
+  : [{level:1, label:'Floor 1', image:D.image, pageW:D.pageW, pageH:D.pageH, pxPerFt:D.pxPerFt, north_deg:D.north_deg||0}]
+  ).map(f=>Object.assign({}, f));
+let currentFloorIdx = 0;
+
+const _allRooms = (D.rooms||[]).map(r => ({id:r.id, label:r.label, type:r.type||"", zone:r.zone||"",
+  level:(r.level!=null?r.level:1), points:r.points.map(p=>[p[0],p[1]]),
   roof:r.roof||"No roof load", floor:r.floor||"No floor load", ceiling_ft:(r.ceiling_ft!=null?r.ceiling_ft:''),
   floor_to_floor_ft:(r.floor_to_floor_ft!=null?r.floor_to_floor_ft:''), carpet:(r.carpet!==false), loads:r.loads||{},
   walls:(r.walls && r.walls.length===r.points.length) ? r.walls.slice() : r.points.map(function(){return "No wall load";})}));
-let nextId = rooms.reduce((m,r)=>Math.max(m,r.id),-1)+1;
+let nextId = _allRooms.reduce((m,r)=>Math.max(m,r.id),-1)+1;
+const _allOpenings = (D.openings||[]).map(o=>Object.assign({},o));
+let opId = _allOpenings.reduce((m,o)=>Math.max(m,o.id),-1)+1;
+
+const floorRoomsMap = new Map(), floorOpeningsMap = new Map();
+floorMeta.forEach(f=>{ floorRoomsMap.set(f.level, []); floorOpeningsMap.set(f.level, []); });
+_allRooms.forEach(r=>{ if(!floorRoomsMap.has(r.level)) floorRoomsMap.set(r.level, []); floorRoomsMap.get(r.level).push(r); });
+const _roomLevelById = new Map(_allRooms.map(r=>[r.id, r.level]));
+_allOpenings.forEach(o=>{ const lvl=_roomLevelById.get(o.rid); if(lvl==null) return;
+  if(!floorOpeningsMap.has(lvl)) floorOpeningsMap.set(lvl, []); floorOpeningsMap.get(lvl).push(o); });
+
+let rooms = floorRoomsMap.get(floorMeta[currentFloorIdx].level) || [];
+let openings = floorOpeningsMap.get(floorMeta[currentFloorIdx].level) || [];
+let PPF = floorMeta[currentFloorIdx].pxPerFt;   // reassignable — "Match total ft²" recalibrates this after drawing
+
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const img = new Image();
 let view = {zoom:1, panX:0, panY:0}, selected=null, mode='select', draft=[], drag=null, VW=0, VH=0;
 let ruler=null;   // {a:[x,y], b:[x,y]} in world (px) coords — last/active measurement, or null
 let lastSavedJSON=null;   // buildPayload() snapshot as of the last save — set once at load, below
-let tab='rooms', paintCat=null, activeType=null, hoverEdge=null, northDeg=(D.north_deg!=null?D.north_deg:0);   // Construction paint state; northDeg = ° CW from screen-up to true north
+let tab='rooms', paintCat=null, activeType=null, hoverEdge=null, northDeg=(floorMeta[currentFloorIdx].north_deg||0);   // Construction paint state; northDeg = ° CW from screen-up to true north (active floor's)
 // Inline type add/edit form state — {cat, name} of the type being edited (name=null means
 // "adding a new one in this cat"), or null when no form is open. Replaces the old one-
 // field-at-a-time prompt() chain for wall/roof/floor/window/door types with a single form
@@ -303,8 +389,8 @@ let FLOOR_TYPES = withNoLoadFirst(D.floor_types, {name:"No floor load", u:0, dar
 // Full DM Room Type records (name -> record) for seeding a room's loads on assign.
 const RT_REC = {}; (D.room_types||[]).forEach(rt=>{ RT_REC[rt.name]=rt; });
 // Window/door INSTANCES placed on walls: {id,cat,type,rid,edge,t(0..1),width_ft}.
-let openings = (D.openings||[]).map(o=>Object.assign({},o));
-let opId = openings.reduce((m,o)=>Math.max(m,o.id),-1)+1, selOpening=null;
+// (openings/opId themselves are set up above, per-floor, alongside rooms/nextId.)
+let selOpening=null;
 function libOf(cat){ return cat==='wall'?WALL_TYPES:cat==='roof'?ROOF_TYPES:cat==='floor'?FLOOR_TYPES:cat==='window'?GLASS_TYPES:cat==='door'?DOOR_TYPES:cat==='zone'?ZONE_LIB:ROOM_TYPE_LIB; }
 function uvec(dx,dy){ const n=Math.hypot(dx,dy)||1; return [dx/n,dy/n]; }
 // ASHRAE 62.1 / FBC Mechanical ventilation rate: Rp (cfm/person, type 1) x Pz (occupants) +
@@ -387,7 +473,17 @@ function hexA(hex,a){ const n=parseInt(hex.slice(1),16); return 'rgba('+((n>>16)
 function rel(e){ const r=cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
 function w2s(p){ return [p[0]*view.zoom+view.panX, p[1]*view.zoom+view.panY]; }
 function s2w(x,y){ return [(x-view.panX)/view.zoom, (y-view.panY)/view.zoom]; }
-function area(pts){ let s=0; for(let i=0;i<pts.length;i++){ const a=pts[i],b=pts[(i+1)%pts.length]; s+=a[0]*b[1]-b[0]*a[1]; } return Math.abs(s/2)/(PPF*PPF); }
+// Parameterized by ppf/northDeg (not the active floor's global PPF/northDeg) so
+// buildPayload() can flatten every floor's rooms using THAT floor's own scale/north,
+// not whichever floor happens to be on-screen when Save is clicked. area()/edgeOrient()
+// below are the everyday shorthand every other call site in this file already uses,
+// for the always-correct active floor.
+function polyAreaFt(pts, ppf){ let s=0; for(let i=0;i<pts.length;i++){ const a=pts[i],b=pts[(i+1)%pts.length]; s+=a[0]*b[1]-b[0]*a[1]; } return Math.abs(s/2)/(ppf*ppf); }
+function edgeOrientFor(r,i,nDeg){ const P=r.points,a=P[i],b=P[(i+1)%P.length]; const dx=b[0]-a[0],dy=b[1]-a[1];
+  let cx=0,cy=0; P.forEach(p=>{cx+=p[0];cy+=p[1];}); cx/=P.length; cy/=P.length;
+  const mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2; let n=[-dy,dx]; if((mx-cx)*n[0]+(my-cy)*n[1]<0) n=[dy,-dx];  // outward (away from centroid)
+  return CARD[Math.round(((bearing(n[0],n[1])-nDeg+360)%360)/45)%8]; }
+function area(pts){ return polyAreaFt(pts, PPF); }
 function total(){ return rooms.reduce((t,r)=>t+area(r.points),0); }
 // Recalibrate the scale so the drawing's total area matches a known real-world
 // total (the engineer's actual sqft, not a guessed drawing scale). Room points
@@ -408,10 +504,7 @@ function segDist(p,a,b){ const dx=b[0]-a[0],dy=b[1]-a[1]; const L2=dx*dx+dy*dy||
 function nearestEdge(wp){ let best=null; rooms.forEach(r=>{ const P=r.points; for(let i=0;i<P.length;i++){ const d=segDist(wp,P[i],P[(i+1)%P.length]); if(!best||d<best.dist) best={room:r,i:i,dist:d}; } }); return best; }
 const CARD=['N','NE','E','SE','S','SW','W','NW'];
 function bearing(vx,vy){ let a=Math.atan2(vx,-vy)*180/Math.PI; return a<0?a+360:a; }  // screen vec (y down) -> ° CW from up
-function edgeOrient(r,i){ const P=r.points,a=P[i],b=P[(i+1)%P.length]; const dx=b[0]-a[0],dy=b[1]-a[1];
-  let cx=0,cy=0; P.forEach(p=>{cx+=p[0];cy+=p[1];}); cx/=P.length; cy/=P.length;
-  const mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2; let n=[-dy,dx]; if((mx-cx)*n[0]+(my-cy)*n[1]<0) n=[dy,-dx];  // outward (away from centroid)
-  return CARD[Math.round(((bearing(n[0],n[1])-northDeg+360)%360)/45)%8]; }
+function edgeOrient(r,i){ return edgeOrientFor(r,i,northDeg); }
 
 function resize(){
   const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
@@ -420,12 +513,13 @@ function resize(){
   ctx.setTransform(dpr,0,0,dpr,0,0);           // draw in CSS px, crisp on Retina
   draw();
 }
-function fit(){ const z=Math.min(VW/D.pageW, VH/D.pageH)*0.96; view.zoom=z;
-  view.panX=(VW-D.pageW*z)/2; view.panY=(VH-D.pageH*z)/2; }
+function fit(){ const f=floorMeta[currentFloorIdx]; const z=Math.min(VW/f.pageW, VH/f.pageH)*0.96; view.zoom=z;
+  view.panX=(VW-f.pageW*z)/2; view.panY=(VH-f.pageH*z)/2; }
 
 function draw(){
   ctx.clearRect(0,0,VW,VH);
-  if(img.complete && img.naturalWidth) ctx.drawImage(img, view.panX, view.panY, D.pageW*view.zoom, D.pageH*view.zoom);
+  const _f=floorMeta[currentFloorIdx];
+  if(img.complete && img.naturalWidth) ctx.drawImage(img, view.panX, view.panY, _f.pageW*view.zoom, _f.pageH*view.zoom);
   rooms.forEach(r=>{
     const sp=r.points.map(w2s);
     ctx.beginPath(); sp.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath();
@@ -866,6 +960,44 @@ document.getElementById('bAdd').onclick=()=>setMode(mode==='draw'?'select':'draw
 document.getElementById('bMeasure').onclick=()=>setMode(mode==='measure'?'select':'measure');
 document.getElementById('bDel').onclick=delSel;
 document.getElementById('bFit').onclick=()=>{ fit(); draw(); };
+// resize() reads the canvas's on-screen size via getBoundingClientRect(); right at initial
+// page load (and occasionally right after a floor switch) the browser hasn't finished
+// laying out #main/#cv yet and this comes back 0x0 — fit() against a 0-size canvas computes
+// zoom=0, which draws nothing and looks like a blank/broken canvas even though every room
+// loaded correctly. Retry on the next frame until there's a real size to fit to.
+function fitWhenReady(){
+  resize();
+  if(VW===0 || VH===0){ requestAnimationFrame(fitWhenReady); return; }
+  fit(); draw();
+}
+// Switch the active floor: stash this floor's live rooms/openings/scale/north back into
+// its bucket, then load the target floor's — see the multi-floor state comment above for
+// why nothing else in the file needs to change to support this.
+function switchFloor(newIdx){
+  if(newIdx===currentFloorIdx || newIdx<0 || newIdx>=floorMeta.length) return;
+  const cur=floorMeta[currentFloorIdx];
+  floorRoomsMap.set(cur.level, rooms);
+  floorOpeningsMap.set(cur.level, openings);
+  cur.pxPerFt=PPF; cur.north_deg=northDeg;
+
+  currentFloorIdx=newIdx;
+  const f=floorMeta[currentFloorIdx];
+  rooms=floorRoomsMap.get(f.level)||[];
+  openings=floorOpeningsMap.get(f.level)||[];
+  PPF=f.pxPerFt; northDeg=f.north_deg||0;
+  selected=null; selOpening=null;
+  document.getElementById('bNorth').value=northDeg;
+  document.getElementById('bFloor').value=String(currentFloorIdx);
+  img.onload=()=>{ fitWhenReady(); };
+  img.src=f.image;
+  renderSide();
+  fitWhenReady();   // in case the browser doesn't re-fire onload for a cached/identical src
+}
+function renderFloorSelect(){
+  const sel=document.getElementById('bFloor');
+  sel.innerHTML=floorMeta.map((f,i)=>'<option value="'+i+'"'+(i===currentFloorIdx?' selected':'')+'>'+f.label+'</option>').join('');
+}
+document.getElementById('bFloor').onchange=e=>switchFloor(+e.target.value);
 document.getElementById('bNorth').oninput=e=>{ northDeg=parseFloat(e.target.value)||0; draw(); };
 document.getElementById('bSfClgRoom').oninput=e=>{ SF.clg_room=parseFloat(e.target.value)||0; };
 document.getElementById('bSfClgVent').oninput=e=>{ SF.clg_vent=parseFloat(e.target.value)||0; };
@@ -877,13 +1009,34 @@ document.getElementById('bMatchSqft').onclick=()=>{
   rescaleToTotalSqft(target);
 };
 function buildPayload(){
-  const out=rooms.map(r=>({id:r.id,label:r.label,type:r.type,zone:r.zone,area_sqft:+area(r.points).toFixed(1),ceiling_ft:r.ceiling_ft,floor_to_floor_ft:r.floor_to_floor_ft,carpet:r.carpet,roof:r.roof,floor:r.floor,loads:r.loads||{},walls:r.walls,wall_orientation:r.points.map((_,i)=>edgeOrient(r,i)),points:r.points}));
-  return {pxPerFt:PPF,north_deg:northDeg,total_sqft:+total().toFixed(1),safety_factors:SF,project_settings:PS,pdf_stem:PDF_STEM,wall_types:WALL_TYPES,roof_types:ROOF_TYPES,floor_types:FLOOR_TYPES,glass_types:GLASS_TYPES,door_types:DOOR_TYPES,
+  // Stash the active floor's live edits back before flattening every floor — otherwise
+  // whatever floor is on-screen right now would be saved from a stale snapshot.
+  floorRoomsMap.set(floorMeta[currentFloorIdx].level, rooms);
+  floorOpeningsMap.set(floorMeta[currentFloorIdx].level, openings);
+  floorMeta[currentFloorIdx].pxPerFt=PPF;
+  floorMeta[currentFloorIdx].north_deg=northDeg;
+
+  const outRooms=[], outOpenings=[];
+  floorMeta.forEach(f=>{
+    (floorRoomsMap.get(f.level)||[]).forEach(r=>{
+      outRooms.push({id:r.id,label:r.label,type:r.type,zone:r.zone,level:f.level,
+        area_sqft:+polyAreaFt(r.points,f.pxPerFt).toFixed(1),
+        ceiling_ft:r.ceiling_ft,floor_to_floor_ft:r.floor_to_floor_ft,carpet:r.carpet,roof:r.roof,floor:r.floor,
+        loads:r.loads||{},walls:r.walls,
+        wall_orientation:r.points.map((_,i)=>edgeOrientFor(r,i,f.north_deg||0)),
+        points:r.points});
+    });
+    (floorOpeningsMap.get(f.level)||[]).forEach(o=>outOpenings.push(o));
+  });
+  const totalSqft=floorMeta.reduce((t,f)=>t+(floorRoomsMap.get(f.level)||[]).reduce((tt,r)=>tt+polyAreaFt(r.points,f.pxPerFt),0),0);
+
+  return {floors:floorMeta.map(f=>({level:f.level,label:f.label,pxPerFt:f.pxPerFt,north_deg:f.north_deg||0})),
+    total_sqft:+totalSqft.toFixed(1),safety_factors:SF,project_settings:PS,pdf_stem:PDF_STEM,wall_types:WALL_TYPES,roof_types:ROOF_TYPES,floor_types:FLOOR_TYPES,glass_types:GLASS_TYPES,door_types:DOOR_TYPES,
     // save the FULL room-type record (lighting/equipment/people/etc.), not just the
     // name — otherwise seedLoads() breaks on every reload/resume (RT_REC[name] comes
     // back undefined, so changing a room's type stops updating its loads at all).
     room_types:ROOM_TYPE_LIB.map(function(n){ return RT_REC[n]||{name:n}; }),
-    zones:ZONE_LIB,openings:openings,rooms:out};
+    zones:ZONE_LIB,openings:outOpenings,rooms:outRooms};
 }
 function downloadJson(payload){
   const b=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
@@ -927,19 +1080,21 @@ window.addEventListener('beforeunload', e=>{
   if(JSON.stringify(buildPayload())!==lastSavedJSON){ e.preventDefault(); e.returnValue=''; }
 });
 
+renderFloorSelect();
 document.getElementById('bNorth').value = northDeg;
 document.getElementById('bSfClgRoom').value = SF.clg_room;
 document.getElementById('bSfClgVent').value = SF.clg_vent;
 document.getElementById('bSfHtgRoom').value = SF.htg_room;
 document.getElementById('bSfHtgVent').value = SF.htg_vent;
-img.onload=()=>{ resize(); fit(); draw(); };
-img.src=D.image;
+img.onload=()=>{ fitWhenReady(); };
+img.src=floorMeta[currentFloorIdx].image;
 window.addEventListener('resize', resize);
 new ResizeObserver(()=>resize()).observe(cv);   // keep buffer synced to display size
 backfillExhaust();
 backfillEquipLatent();
 backfillVentRates();
-resize(); fit(); renderSide(); draw();
+renderSide();
+fitWhenReady();
 lastSavedJSON = JSON.stringify(buildPayload());   // baseline — resumed edits count as "saved"
 </script></body></html>
 """
