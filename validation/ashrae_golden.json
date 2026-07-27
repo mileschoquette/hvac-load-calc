@@ -1,0 +1,56 @@
+{
+  "source": "RTS Cooling and Heating Loads Examples - IP Units rev 2017-04-06.xls",
+  "standard": "ASHRAE Handbook-Fundamentals Ch.18 (RTS), IP units, rev 2017-04-06",
+  "building": "ASHRAE Example Office Building, Atlanta GA (Burdell Engineering)",
+  "note": "Integration targets. Component-level targets (Tables 28-33) extracted per-test.",
+  "cases": {
+    "single_room": {
+      "room_sensible_btuh": 3777.0193728594077,
+      "return_air_sensible_btuh": 144.60925995569187,
+      "room_latent_btuh": 200,
+      "room_heating_btuh": 4391.265,
+      "total_block_cooling_btuh": 4121.6286328151,
+      "total_block_cooling_tons": 0.34,
+      "sf_per_ton": 378,
+      "total_heating_btuh": 4391.265,
+      "peak_month": 8,
+      "peak_hour": 14
+    },
+    "ahu1_first_floor": {
+      "room_sensible_btuh": 250608.84053845864,
+      "return_air_sensible_btuh": 0,
+      "room_latent_btuh": 26600,
+      "room_heating_btuh": 82542.255,
+      "total_block_cooling_btuh": 417766.34067092533,
+      "total_block_cooling_tons": 34.81,
+      "sf_per_ton": 546,
+      "total_heating_btuh": 229134.855,
+      "peak_month": 8,
+      "peak_hour": 15
+    },
+    "ahu2_second_floor": {
+      "room_sensible_btuh": 220180.6730190903,
+      "return_air_sensible_btuh": 0,
+      "room_latent_btuh": 22000,
+      "room_heating_btuh": 149948.29800000004,
+      "total_block_cooling_btuh": 361222.7024387133,
+      "total_block_cooling_tons": 30.1,
+      "sf_per_ton": 522,
+      "total_heating_btuh": 271190.29800000007,
+      "peak_month": 7,
+      "peak_hour": 14
+    },
+    "building": {
+      "room_sensible_btuh": 459241.03437130386,
+      "return_air_sensible_btuh": 0,
+      "room_latent_btuh": 48600,
+      "room_heating_btuh": 280050.48300000007,
+      "total_block_cooling_btuh": 790953.0199073801,
+      "total_block_cooling_tons": 65.91,
+      "sf_per_ton": 526,
+      "total_heating_btuh": 547885.0830000001,
+      "peak_month": 7,
+      "peak_hour": 15
+    }
+  }
+}

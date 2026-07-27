@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "source": "ASHRAE Handbook of Fundamentals — Climatic Design Conditions (IP). Florida-first seed.",
+    "units": "temperatures °F; humidity ratio grains/lb; elevation ft; daily range °F; tau_b/tau_d dimensionless",
+    "verified": false,
+    "note": "PROVISIONAL. Values transcribed from the architecture-doc Florida seed and are representative ASHRAE-basis figures, NOT yet verified against the published Fundamentals climatic-design tables. VERIFY each row (especially the 1% dehumidification dew point — the FL latent driver — and tau_b/tau_d, assigned by climate zone only: 1A humid-coastal vs 2A, not station-specific) before using for a stamped calc.",
+    "fields": {
+      "htg_db_99 / htg_db_996": "heating design dry-bulb, 99% and 99.6% annual",
+      "clg_db_04/1/2 + clg_mcwb_04/1/2": "cooling design dry-bulb + mean coincident wet-bulb at 0.4%, 1%, 2% annual",
+      "dehum_dp_1 / dehum_mcdb_1 / dehum_hr_1": "1% dehumidification design dew point, mean coincident dry-bulb, humidity ratio (grains/lb)",
+      "mean_daily_range_f": "cooling mean daily range",
+      "tau_b / tau_d": "clear-sky beam/diffuse optical depth (ASHRAE 2009+ Ch.14 model) — a single representative summer-design pair per climate zone (1A vs 2A), not yet station-differentiated"
+    }
+  },
+  "stations": [
+    {"name": "Miami Intl AP, FL",        "wmo_id": "722020", "lat": 25.79, "lon": -80.32, "elev_ft": 11, "climate_zone": "1A", "htg_db_99": 50, "htg_db_996": 47, "clg_db_04": 92, "clg_mcwb_04": 77, "clg_db_1": 91, "clg_mcwb_1": 77, "clg_db_2": 90, "clg_mcwb_2": 77, "dehum_dp_1": 77, "dehum_mcdb_1": 82, "dehum_hr_1": 144, "mean_daily_range_f": 12, "tau_b": 0.44, "tau_d": 2.30},
+    {"name": "Ft Lauderdale Exec, FL",   "wmo_id": "722025", "lat": 26.20, "lon": -80.17, "elev_ft": 9,  "climate_zone": "1A", "htg_db_99": 51, "htg_db_996": 48, "clg_db_04": 92, "clg_mcwb_04": 78, "clg_db_1": 91, "clg_mcwb_1": 78, "clg_db_2": 90, "clg_mcwb_2": 78, "dehum_dp_1": 78, "dehum_mcdb_1": 83, "dehum_hr_1": 149, "mean_daily_range_f": 13, "tau_b": 0.44, "tau_d": 2.30},
+    {"name": "W Palm Beach Intl, FL",    "wmo_id": "722030", "lat": 26.69, "lon": -80.10, "elev_ft": 19, "climate_zone": "1A", "htg_db_99": 50, "htg_db_996": 46, "clg_db_04": 92, "clg_mcwb_04": 78, "clg_db_1": 91, "clg_mcwb_1": 78, "clg_db_2": 90, "clg_mcwb_2": 78, "dehum_dp_1": 78, "dehum_mcdb_1": 83, "dehum_hr_1": 149, "mean_daily_range_f": 14, "tau_b": 0.44, "tau_d": 2.30},
+    {"name": "Key West Intl, FL",        "wmo_id": "722010", "lat": 24.55, "lon": -81.75, "elev_ft": 4,  "climate_zone": "1A", "htg_db_99": 57, "htg_db_996": 55, "clg_db_04": 91, "clg_mcwb_04": 79, "clg_db_1": 90, "clg_mcwb_1": 79, "clg_db_2": 89, "clg_mcwb_2": 79, "dehum_dp_1": 79, "dehum_mcdb_1": 84, "dehum_hr_1": 154, "mean_daily_range_f": 9, "tau_b": 0.43, "tau_d": 2.32},
+    {"name": "Ft Myers SW FL Intl, FL",  "wmo_id": "722108", "lat": 26.59, "lon": -81.86, "elev_ft": 15, "climate_zone": "1A", "htg_db_99": 50, "htg_db_996": 46, "clg_db_04": 93, "clg_mcwb_04": 77, "clg_db_1": 92, "clg_mcwb_1": 77, "clg_db_2": 91, "clg_mcwb_2": 76, "dehum_dp_1": 77, "dehum_mcdb_1": 82, "dehum_hr_1": 144, "mean_daily_range_f": 16, "tau_b": 0.44, "tau_d": 2.30},
+    {"name": "Tampa Intl AP, FL",        "wmo_id": "722110", "lat": 27.96, "lon": -82.54, "elev_ft": 19, "climate_zone": "2A", "htg_db_99": 40, "htg_db_996": 36, "clg_db_04": 92, "clg_mcwb_04": 77, "clg_db_1": 92, "clg_mcwb_1": 77, "clg_db_2": 91, "clg_mcwb_2": 76, "dehum_dp_1": 77, "dehum_mcdb_1": 82, "dehum_hr_1": 144, "mean_daily_range_f": 17, "tau_b": 0.47, "tau_d": 2.20},
+    {"name": "Orlando Intl AP, FL",      "wmo_id": "722050", "lat": 28.43, "lon": -81.32, "elev_ft": 96, "climate_zone": "2A", "htg_db_99": 42, "htg_db_996": 38, "clg_db_04": 94, "clg_mcwb_04": 76, "clg_db_1": 93, "clg_mcwb_1": 76, "clg_db_2": 92, "clg_mcwb_2": 76, "dehum_dp_1": 76, "dehum_mcdb_1": 81, "dehum_hr_1": 140, "mean_daily_range_f": 17, "tau_b": 0.47, "tau_d": 2.20},
+    {"name": "Jacksonville Intl, FL",    "wmo_id": "722060", "lat": 30.49, "lon": -81.69, "elev_ft": 26, "climate_zone": "2A", "htg_db_99": 32, "htg_db_996": 28, "clg_db_04": 95, "clg_mcwb_04": 77, "clg_db_1": 94, "clg_mcwb_1": 76, "clg_db_2": 92, "clg_mcwb_2": 76, "dehum_dp_1": 76, "dehum_mcdb_1": 81, "dehum_hr_1": 140, "mean_daily_range_f": 18, "tau_b": 0.48, "tau_d": 2.18},
+    {"name": "Tallahassee Rgnl, FL",     "wmo_id": "722140", "lat": 30.39, "lon": -84.35, "elev_ft": 53, "climate_zone": "2A", "htg_db_99": 30, "htg_db_996": 26, "clg_db_04": 95, "clg_mcwb_04": 76, "clg_db_1": 94, "clg_mcwb_1": 76, "clg_db_2": 93, "clg_mcwb_2": 76, "dehum_dp_1": 75, "dehum_mcdb_1": 80, "dehum_hr_1": 136, "mean_daily_range_f": 19, "tau_b": 0.48, "tau_d": 2.18},
+    {"name": "Pensacola Rgnl, FL",       "wmo_id": "722223", "lat": 30.48, "lon": -87.19, "elev_ft": 26, "climate_zone": "2A", "htg_db_99": 32, "htg_db_996": 28, "clg_db_04": 94, "clg_mcwb_04": 78, "clg_db_1": 93, "clg_mcwb_1": 77, "clg_db_2": 92, "clg_mcwb_2": 77, "dehum_dp_1": 77, "dehum_mcdb_1": 82, "dehum_hr_1": 144, "mean_daily_range_f": 16, "tau_b": 0.47, "tau_d": 2.20}
+  ]
+}
