@@ -1,0 +1,16 @@
+# Load Calc Software — dependencies
+# Install: pip install -r requirements.txt
+
+# --- Runtime (needed to run app.py / loadcalc.py) ---
+pymupdf>=1.27.2      # PDF vector/text extraction (imported as `fitz`) — parser/pdf_extractor.py, export_review.py, loadcalc.py
+shapely>=2.1.2        # polygon geometry for room-building — parser/room_builder.py, parser/models.py
+
+# --- Test suite only (tests/*.py, validation/extract_golden.py) ---
+# Reads the bundled ASHRAE RTS *.xls workbooks for golden-value validation.
+# Not needed to run the app itself.
+pandas>=2.2.3
+xlrd>=2.0.2
+
+# --- Dev QA only ---
+# Validates the JS embedded in export_review.py's generated review.html.
+esprima>=4.0.1
