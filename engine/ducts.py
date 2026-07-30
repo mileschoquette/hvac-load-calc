@@ -102,13 +102,15 @@ def match_diffuser(terminal_kind, cfm):
 def match_air_handler(cfm):
     """Smallest air handler whose `rated_supply_cfm` covers `cfm`, rounding up. Clamps to
     the largest available model (flagged `above_max`) if `cfm` exceeds every model's rating;
-    None if the table's empty."""
+    None if the table's empty. Includes the matched row's own `rated_supply_cfm` so callers
+    can prorate a theoretical CFM total against the real unit's rated airflow."""
     rows = [r for r in _load_csv("air_handlers.csv") if r["rated_supply_cfm"] is not None]
     matched = _match_ceiling(rows, cfm, "rated_supply_cfm")
     if matched is None:
         return None
     row, clamped = matched
-    return {"manufacturer": row["manufacturer"], "model": row["model"], "clamped": clamped}
+    return {"manufacturer": row["manufacturer"], "model": row["model"],
+            "rated_supply_cfm": row["rated_supply_cfm"], "clamped": clamped}
 
 
 def match_condensing_unit(tons):
@@ -151,6 +153,14 @@ def rect_duct_width(cfm, velocity_fpm, height_in):
     width = area_sqft * 144.0 / height_in
     steps = math.ceil(width / STANDARD_RECT_STEP_IN)
     return max(STANDARD_RECT_STEP_IN, steps * STANDARD_RECT_STEP_IN)
+
+
+def _round_up_5(cfm):
+    """Rounds a CFM value up to the nearest 5 (the increment diffuser/grille and air-handler
+    airflow are conventionally specified in) — None in, None out."""
+    if cfm is None:
+        return None
+    return math.ceil(cfm / 5.0) * 5.0
 
 
 def _closest_on_seg(p, a, b):
@@ -250,6 +260,20 @@ def _run_key(run):
     return (run.get("level", 1), run.get("system"))
 
 
+def _collect_subtree_runs(root_runs, children):
+    """Every run in the subtree(s) rooted at `root_runs` (roots included), walking the
+    already-built BFS `children` map (id(parent_run) -> [child_run, ...]). Since each
+    non-root run has exactly one parent in that forest, starting from one AH's own root
+    runs correctly isolates just that AH's subtree, even though `children` may have been
+    built from a BFS that started at several different AHs' roots at once."""
+    runs = list(root_runs)
+    frontier = list(root_runs)
+    while frontier:
+        frontier = [c for r in frontier for c in children.get(id(r), [])]
+        runs.extend(frontier)
+    return runs
+
+
 def size_duct_network(review, result, design=None):
     """Auto-sizes every duct run/terminal that isn't flagged `auto: False` (a deliberate
     manual override). Returns only the changed fields, keyed by id, so the caller can
@@ -292,19 +316,24 @@ def size_duct_network(review, result, design=None):
     # root) and sum each terminal's CFM upward through the tree. A partition with no AH in
     # it is skipped entirely — without a root there's no way to tell which direction is
     # "downstream", so any existing manual `cfm` on those runs is left untouched.
+    #
+    # Supply groups (across every level/floor) are fully resolved — BFS sum, then AH-match
+    # proration + round-up-5 — before any return group runs. That's what lets step 2c below
+    # derive each room's return CFM from its now-FINAL (post-proration) supply total instead
+    # of an independent sensible_btuh calc, so a room's return always equals its supply.
     run_cfm = {}
     equipment_cfm = {}
     by_key = {}
     for r in all_runs:
         by_key.setdefault(_run_key(r), []).append(r)
 
-    for (level, system), group in by_key.items():
+    def _process_group(level, system, group):
         roots = [eq for eq in all_equipment if eq.get("level", 1) == level and eq.get("kind") == "AH"]
         if not roots:
-            continue
+            return
         root_runs = [r for r in group if any(_point_touches_run(eq["point"], r["points"]) for eq in roots)]
         if not root_runs:
-            continue
+            return
 
         touching_terminals = {}
         for t in all_terminals:
@@ -351,9 +380,70 @@ def size_duct_network(review, result, design=None):
             subtree_cfm[id(r)] = total
             run_cfm[r["id"]] = total
 
+        # 2b. Proration: the BFS pass above gives each terminal/run a THEORETICAL cfm (pure
+        # room-load arithmetic). Real equipment only comes in discrete rated sizes, so once
+        # an AH's supply subtree is matched to a real unit, every terminal downstream of it
+        # gets scaled to that unit's actual rated airflow and rounded up to the nearest 5
+        # cfm (the increment diffuser/grille catalogs use) — return terminals just get the
+        # same rounding, with no scaling (there's no "rated return cfm" to prorate against).
+        # `subtree_cfm`/`run_cfm` are then re-summed for just this subtree so duct sizing
+        # (step 3) picks up these final numbers instead of the pre-prorate ones.
         for eq in roots:
-            eq_roots = [r for r in group if _point_touches_run(eq["point"], r["points"])]
-            equipment_cfm[eq["id"]] = sum(subtree_cfm.get(id(r), 0.0) for r in eq_roots)
+            eq_root_runs = [r for r in group if _point_touches_run(eq["point"], r["points"])]
+            subtree_runs = _collect_subtree_runs(eq_root_runs, children)
+            seen_ids = set()
+            my_terminals = []
+            for r in subtree_runs:
+                for t in touching_terminals.get(id(r), []):
+                    if t["id"] not in seen_ids:
+                        seen_ids.add(t["id"])
+                        my_terminals.append(t)
+            theoretical_total = sum(terminal_cfm.get(t["id"], 0.0) for t in my_terminals)
+
+            if system == "supply":
+                match = match_air_handler(theoretical_total) if theoretical_total > 0 else None
+                real_cfm = match["rated_supply_cfm"] if match else None
+                scale = (real_cfm / theoretical_total) if (real_cfm and theoretical_total) else 1.0
+                for t in my_terminals:
+                    terminal_cfm[t["id"]] = _round_up_5(terminal_cfm.get(t["id"], 0.0) * scale)
+                equipment_cfm.setdefault(eq["id"], {})["supply"] = real_cfm if real_cfm is not None else theoretical_total
+            else:
+                for t in my_terminals:
+                    terminal_cfm[t["id"]] = _round_up_5(terminal_cfm.get(t["id"], 0.0))
+                equipment_cfm.setdefault(eq["id"], {})["return"] = sum(terminal_cfm[t["id"]] for t in my_terminals)
+
+            subtree_ids = {id(r) for r in subtree_runs}
+            for r in reversed([o for o in order if id(o) in subtree_ids]):
+                total = sum(terminal_cfm.get(t["id"], 0.0) for t in touching_terminals.get(id(r), []))
+                for c in children.get(id(r), []):
+                    if id(c) in subtree_ids:
+                        total += subtree_cfm[id(c)]
+                subtree_cfm[id(r)] = total
+                run_cfm[r["id"]] = total
+
+    for (level, system), group in by_key.items():
+        if system == "supply":
+            _process_group(level, system, group)
+
+    # 2c. Return terminal CFM = that room's now-finalized (post-proration, post-round-up-5)
+    # supply CFM total, split evenly across that room's return terminals — not an
+    # independent `required_supply_cfm(sensible_btuh)` calc, so return always matches supply
+    # even after the AH-match proration above rescaled supply away from its theoretical
+    # value. A room with no supply terminals gets 0 on its return terminals.
+    room_supply_totals = {}
+    for (room_id, is_supply), group in room_terminal_groups.items():
+        if is_supply:
+            room_supply_totals[room_id] = sum(terminal_cfm.get(t["id"], 0.0) for t in group)
+    for (room_id, is_supply), group in room_terminal_groups.items():
+        if is_supply:
+            continue
+        share = room_supply_totals.get(room_id, 0.0) / len(group) if group else 0.0
+        for t in group:
+            terminal_cfm[t["id"]] = share
+
+    for (level, system), group in by_key.items():
+        if system == "return":
+            _process_group(level, system, group)
 
     # 3. Sizing: whatever CFM each run ended up with (skip anything a manual override
     # kept out of `run_cfm`, or that the engineer flagged `auto: False`).
@@ -371,9 +461,17 @@ def size_duct_network(review, result, design=None):
             changed_runs[r["id"]] = {"cfm": round(cfm, 1), "diameter_in": round_duct_diameter(cfm, velocity),
                                       "width_in": None, "height_in": None}
 
-    changed_terminals = {t["id"]: {"cfm": round(terminal_cfm[t["id"]], 1)} for t in all_terminals
-                         if t.get("auto", True) and t["id"] in terminal_cfm}
-    changed_equipment = {eq_id: {"cfm": round(cfm, 1)} for eq_id, cfm in equipment_cfm.items()}
+    changed_terminals = {}
+    for t in all_terminals:
+        if not (t.get("auto", True) and t["id"] in terminal_cfm):
+            continue
+        cfm = terminal_cfm[t["id"]]
+        match = match_diffuser(t["kind"], cfm)
+        changed_terminals[t["id"]] = {"cfm": round(cfm, 1), "size": match["size"] if match else None}
+
+    changed_equipment = {eq_id: {"supply_cfm": round(v["supply"], 1) if "supply" in v else None,
+                                  "return_cfm": round(v["return"], 1) if "return" in v else None}
+                         for eq_id, v in equipment_cfm.items()}
 
     return {"duct_runs": changed_runs, "duct_terminals": changed_terminals, "duct_equipment": changed_equipment}
 
@@ -453,10 +551,11 @@ def duct_report_data(review, result, design=None):
 
     equipment_rows = []
     for eq in equipment:
-        row = {"tag": eq.get("label") or eq["kind"], "kind": eq["kind"], "cfm": eq.get("cfm"),
+        row = {"tag": eq.get("label") or eq["kind"], "kind": eq["kind"],
+               "supply_cfm": eq.get("supply_cfm"), "return_cfm": eq.get("return_cfm"),
                "matched_manufacturer": None, "matched_model": None, "matched_clamped": None}
-        if eq["kind"] == "AH" and eq.get("cfm") is not None:
-            match = match_air_handler(eq["cfm"])
+        if eq["kind"] == "AH" and eq.get("supply_cfm") is not None:
+            match = match_air_handler(eq["supply_cfm"])
         elif eq["kind"] == "CU":
             zone = zones_by_name.get(eq.get("zone"))
             tons = zone["tons"] if zone else result.get("building", {}).get("tons")

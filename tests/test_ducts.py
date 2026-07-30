@@ -8,6 +8,7 @@ real CSVs' exact current contents — those are maintained/cleaned up separately
 
     python3 tests/test_ducts.py
 """
+import math
 import sys
 from pathlib import Path
 
@@ -44,7 +45,10 @@ def test_formulas():
 def test_network():
     # One AH, a rect trunk, and two branches teeing off its middle into two rooms with
     # different sensible loads. Room 1: 24,000 Btu/h -> 24000/22 = 1090.909 cfm.
-    # Room 2: 12,000 Btu/h -> 12000/22 = 545.455 cfm. Trunk should carry their sum.
+    # Room 2: 12,000 Btu/h -> 12000/22 = 545.455 cfm. Theoretical trunk total is their sum,
+    # 1636.364 cfm, but the real AH (from the actual equipment_data/air_handlers.csv, not a
+    # fixture here) only comes in discrete sizes, so the final terminal/trunk cfm is that
+    # theoretical split PRORATED to whatever real unit covers it, then rounded up to 5.
     review = {
         "rooms": [
             {"id": 1, "points": [[0, 0], [100, 0], [100, 200], [0, 200]]},
@@ -70,13 +74,20 @@ def test_network():
     result = {"rooms": [{"id": 1, "sensible_btuh": 24000.0}, {"id": 2, "sensible_btuh": 12000.0}]}
     out = size_duct_network(review, result)
 
+    theoretical1, theoretical2 = 24000.0 / 22.0, 12000.0 / 22.0
+    theoretical_total = theoretical1 + theoretical2
+    match = match_air_handler(theoretical_total)
+    scale = match["rated_supply_cfm"] / theoretical_total
+    t20_expected = math.ceil((theoretical1 * scale) / 5.0) * 5.0
+    t21_expected = math.ceil((theoretical2 * scale) / 5.0) * 5.0
+
     t20, t21 = out["duct_terminals"][20]["cfm"], out["duct_terminals"][21]["cfm"]
-    assert abs(t20 - 1090.9) < 0.1
-    assert abs(t21 - 545.5) < 0.1
+    assert abs(t20 - t20_expected) < 0.1
+    assert abs(t21 - t21_expected) < 0.1
     assert abs(out["duct_runs"][10]["cfm"] - (t20 + t21)) < 0.1   # trunk = sum of both branches
     assert abs(out["duct_runs"][11]["cfm"] - t20) < 0.1
     assert abs(out["duct_runs"][12]["cfm"] - t21) < 0.1
-    assert out["duct_equipment"][30]["cfm"] == out["duct_runs"][10]["cfm"]
+    assert out["duct_equipment"][30]["supply_cfm"] == match["rated_supply_cfm"]
     # the rootless return run has no way to know its flow direction -> left untouched
     assert 13 not in out["duct_runs"]
 
@@ -135,12 +146,14 @@ def test_match_air_handler():
     ducts._csv_cache["air_handlers.csv"] = _FIXTURE_AHS
     try:
         # 1500 cfm rounds up to the smallest covering model, T2 (2000 cfm)
-        assert match_air_handler(1500) == {"manufacturer": "Trane", "model": "T2", "clamped": None}
+        assert match_air_handler(1500) == {"manufacturer": "Trane", "model": "T2",
+                                            "rated_supply_cfm": 2000.0, "clamped": None}
         # above every model's rating -> largest available, flagged
         m_high = match_air_handler(5000)
         assert m_high["model"] == "T3" and m_high["clamped"] == "above_max"
         # well below the smallest model -> that smallest model still covers it, no clamp
-        assert match_air_handler(100) == {"manufacturer": "Trane", "model": "T1", "clamped": None}
+        assert match_air_handler(100) == {"manufacturer": "Trane", "model": "T1",
+                                           "rated_supply_cfm": 1000.0, "clamped": None}
     finally:
         del ducts._csv_cache["air_handlers.csv"]
     # empty table -> None
@@ -194,8 +207,9 @@ def test_duct_report_data_matching():
         out = duct_report_data(review, result)
 
         term = out["terminals"][0]
-        # 1090.9 cfm falls in BB's 151-300 band? No — falls in CC's 301-500? Neither:
-        # 1090.9 is above every band's max (500) -> clamped to CC, flagged above_max.
+        # Theoretical 1090.9 cfm matches AH fixture T2 (2000 cfm, the only one that covers
+        # it) and prorates 1:1 up to exactly 2000 (single terminal, single AH) — still way
+        # above every diffuser band's max (500) -> clamped to CC, flagged above_max either way.
         assert term["matched_manufacturer"] == "Acme"
         assert term["matched_model_line"] == "CC"
         assert term["matched_clamped"] == "above_max"
@@ -217,6 +231,123 @@ def test_duct_report_data_matching():
     print("PASS  duct_report_data equipment matching (synthetic fixture)")
 
 
+def test_supply_return_proration():
+    # Same AH is root for BOTH a supply subtree and a separate return subtree — exactly the
+    # scenario the old flat `equipment_cfm[eq["id"]] = ...` bug clobbered (the return
+    # group's iteration silently overwrote the supply group's). Two supply branches off a
+    # trunk feed two rooms with known loads; their theoretical sum (1300 cfm) sits strictly
+    # BETWEEN two fixture air handlers (1000/2000 cfm), so the AH match forces a real,
+    # non-1.0 proration scale (2000/1300 = 1.5385) instead of an accidental no-op.
+    #
+    # Room 1 ALSO has a return terminal — this is what proves return-follows-supply: before
+    # the fix, room 1's return terminal would have been sized off room 1's own sensible_btuh
+    # independently (16,500/22 = 750 cfm -> 750 rounded to 5), completely ignoring that room
+    # 1's supply got rescaled by the AH-match proration above. After the fix, the return
+    # terminal must equal room 1's FINAL (post-proration, post-round-5) supply total instead
+    # — a different, larger number — so this assertion would have failed before the change.
+    #
+    # Room 3 has a return terminal but NO supply terminal at all -> must come back as 0 cfm,
+    # not an independent sensible_btuh-based value (there's no supply in that room to match).
+    review = {
+        "rooms": [
+            {"id": 1, "points": [[0, 0], [100, 0], [100, 200], [0, 200]]},
+            {"id": 2, "points": [[200, 0], [300, 0], [300, 200], [200, 200]]},
+            # Kept well clear of room 1/2's edges (x=0/100/200/300) so point-in-polygon
+            # boundary handling can't accidentally fold the return terminal into room 1.
+            {"id": 3, "points": [[-100, 100], [-10, 100], [-10, 200], [-100, 200]]},
+        ],
+        "duct_runs": [
+            {"id": 40, "system": "supply", "form": "auto", "points": [[0, 50], [300, 50]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 41, "system": "supply", "form": "auto", "points": [[50, 50], [50, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 42, "system": "supply", "form": "auto", "points": [[250, 50], [250, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            # Return run into room 1 (same room as supply terminal 50).
+            {"id": 43, "system": "return", "form": "auto", "points": [[0, 50], [10, 50], [10, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            # Separate return run into room 3, which has no supply terminal at all.
+            {"id": 44, "system": "return", "form": "auto", "points": [[0, 50], [-20, 50], [-20, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+        ],
+        "duct_terminals": [
+            {"id": 50, "kind": "ceiling_supply", "point": [50, 150], "level": 1, "auto": True, "cfm": None},
+            {"id": 51, "kind": "ceiling_supply", "point": [250, 150], "level": 1, "auto": True, "cfm": None},
+            # Room 1's return terminal — sits in the same room as supply terminal 50.
+            {"id": 52, "kind": "ceiling_return", "point": [10, 150], "level": 1, "auto": True, "cfm": None},
+            # Room 3's return terminal — room 3 has no supply terminals.
+            {"id": 53, "kind": "ceiling_return", "point": [-20, 150], "level": 1, "auto": True, "cfm": None},
+        ],
+        "duct_equipment": [{"id": 60, "kind": "AH", "point": [0, 50], "level": 1}],
+    }
+    # Room 1: 16,500 Btu/h -> 16500/22 = 750.0 cfm. Room 2: 12,100 Btu/h -> 12100/22 = 550.0
+    # cfm (theoretical supply sum 1300.0). Room 3 has no supply, so its sensible_btuh is
+    # irrelevant to its return terminal now — included just to prove that.
+    result = {"rooms": [{"id": 1, "sensible_btuh": 16500.0}, {"id": 2, "sensible_btuh": 12100.0},
+                        {"id": 3, "sensible_btuh": 10100.0}]}
+
+    diffuser_fixture = _FIXTURE_DIFFUSERS + [
+        {"manufacturer": "Acme", "model_line": "RR", "terminal_kind": "ceiling_return",
+         "neck_or_face_size": "10in", "cfm_min": 50.0, "cfm_max": 5000.0},
+    ]
+    ducts._csv_cache["diffuser_schedule.csv"] = diffuser_fixture
+    ducts._csv_cache["air_handlers.csv"] = _FIXTURE_AHS
+    try:
+        out = size_duct_network(review, result)
+
+        # Theoretical supply total 750 + 550 = 1300 cfm -> smallest fixture AH covering it
+        # is T2 (2000 cfm, since T1's 1000 doesn't) -> scale = 2000/1300 = 1.538461...
+        theoretical1, theoretical2 = 750.0, 550.0
+        scale = 2000.0 / (theoretical1 + theoretical2)
+        t50_expected = math.ceil((theoretical1 * scale) / 5.0) * 5.0
+        t51_expected = math.ceil((theoretical2 * scale) / 5.0) * 5.0
+
+        t50, t51 = out["duct_terminals"][50]["cfm"], out["duct_terminals"][51]["cfm"]
+        t52, t53 = out["duct_terminals"][52]["cfm"], out["duct_terminals"][53]["cfm"]
+
+        # (a) the AH's supply_cfm is the matched fixture unit's RATED cfm (2000), not the
+        # raw theoretical sum (1300) — and, since this is the same AH id, its return_cfm is
+        # ALSO present at the same time (the bug this whole change fixes).
+        assert out["duct_equipment"][60]["supply_cfm"] == 2000.0
+        assert out["duct_equipment"][60]["return_cfm"] is not None
+
+        # (b) both supply terminals are scaled by that same ~1.538x ratio and land on a
+        # multiple of 5.
+        assert t50 == t50_expected and t50 % 5 == 0
+        assert t51 == t51_expected and t51 % 5 == 0
+        assert abs(t50 / theoretical1 - t51 / theoretical2) < 0.01
+
+        # (c) room 1's return terminal equals room 1's FINAL (post-proration, post-round-5)
+        # supply total, t50 — NOT the independent theoretical value 750 (which is what the
+        # pre-fix code would have produced: ceil(750/5)*5 = 750, a different number from
+        # t50 since t50 is scaled by ~1.538x). This is the core assertion of this test.
+        assert t50 != 750.0   # sanity: proration actually moved supply away from theoretical
+        assert t52 == t50
+
+        # (d) room 3's return terminal has no matching supply terminal in its room -> 0 cfm,
+        # not an independent sensible_btuh-derived value (10100/22 = 459.09... rounded to 460
+        # is what the pre-fix code would have produced here).
+        assert t53 == 0.0
+
+        # (e) the trunk's cfm is the sum of the two branches' FINAL (post-prorate,
+        # post-round) values, not their pre-prorate theoretical sum (1300).
+        assert out["duct_runs"][40]["cfm"] == t50 + t51
+        assert out["duct_runs"][41]["cfm"] == t50
+        assert out["duct_runs"][42]["cfm"] == t51
+
+        # (f) every supply terminal's `size` is populated from the fixture diffuser table;
+        # room 1's return terminal matches too (t52 == t50 > 0), room 3's zero-cfm return
+        # terminal has no diffuser match (0 cfm falls outside every band, `match_diffuser`
+        # still clamps it, so just confirm it's the room-1-mirroring terminal that's sized).
+        assert out["duct_terminals"][50]["size"] is not None
+        assert out["duct_terminals"][51]["size"] is not None
+        assert out["duct_terminals"][52]["size"] == "10in"
+    finally:
+        del ducts._csv_cache["diffuser_schedule.csv"]
+        del ducts._csv_cache["air_handlers.csv"]
+    print("PASS  duct network supply/return proration + return-follows-supply + rounding")
+
+
 def main():
     test_formulas()
     test_network()
@@ -224,6 +355,7 @@ def main():
     test_match_air_handler()
     test_match_condensing_unit()
     test_duct_report_data_matching()
+    test_supply_return_proration()
 
 
 if __name__ == "__main__":

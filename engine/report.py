@@ -233,9 +233,10 @@ def _suggested_model(row, model_key="matched_model"):
 def _duct_schedule(ducts):
     out = ""
     if ducts.get("equipment"):
-        cols = ["Tag", "Kind", "Total CFM", "Suggested Model"]
+        cols = ["Tag", "Kind", "Supply CFM", "Return CFM", "Suggested Model"]
         rows = "".join("<tr>" + _td(e["tag"], False) + _td(e["kind"], False)
-                        + _td(f"{e['cfm']:,.0f}" if e.get("cfm") is not None else "—")
+                        + _td(f"{e['supply_cfm']:,.0f}" if e.get("supply_cfm") is not None else "—")
+                        + _td(f"{e['return_cfm']:,.0f}" if e.get("return_cfm") is not None else "—")
                         + _td(_suggested_model(e), False) + "</tr>"
                         for e in ducts["equipment"])
         out += _table("Air Handling Equipment", len(cols), col_headers=cols, rows=rows)

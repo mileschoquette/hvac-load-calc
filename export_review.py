@@ -671,10 +671,8 @@ const DUCT_DEFAULT_W_IN=12, DUCT_DEFAULT_H_IN=8, DUCT_DEFAULT_DIA_IN=8;
 function inToPx(inches){ return (inches/12) * PPF * view.zoom; }
 function ductSizeLabel(d){
   const form=effectiveForm(d);
-  const dims = form==='rect' ? (d.width_in&&d.height_in ? (d.width_in+'X'+d.height_in) : '')
-                             : (d.diameter_in ? (d.diameter_in+'Ø') : '');
-  const cfm = d.cfm!=null ? d.cfm+' cfm' : '';
-  return [dims,cfm].filter(Boolean).join(' · ');
+  return form==='rect' ? (d.width_in&&d.height_in ? (d.width_in+'X'+d.height_in) : '')
+                       : (d.diameter_in ? (d.diameter_in+'Ø') : '');
 }
 function drawDuctLabel(sp, label){
   if(!label) return;
@@ -844,7 +842,13 @@ function drawEquipmentIcon(eq, on){
   ctx.strokeStyle = on ? '#111827' : '#5b21b6'; ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=1.5;
   if(eq.kind==='CU'){ ctx.beginPath(); ctx.arc(s[0],s[1],sz,0,7); ctx.fill(); ctx.stroke(); }
   else { ctx.fillRect(s[0]-sz,s[1]-sz,sz*2,sz*2); ctx.strokeRect(s[0]-sz,s[1]-sz,sz*2,sz*2); }
-  ctx.fillStyle='#111827'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center'; ctx.fillText(eq.label||eq.kind, s[0], s[1]+sz+11);
+  ctx.fillStyle='#111827'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center';
+  let ly=s[1]+sz+11;
+  ctx.fillText(eq.label||eq.kind, s[0], ly);
+  if(eq.kind==='AH'){
+    if(eq.supply_cfm!=null){ ly+=11; ctx.fillText('Supply: '+eq.supply_cfm+' cfm', s[0], ly); }
+    if(eq.return_cfm!=null){ ly+=11; ctx.fillText('Return: '+eq.return_cfm+' cfm', s[0], ly); }
+  }
 }
 function nearestEdge(wp){ let best=null; rooms.forEach(r=>{ const P=r.points; for(let i=0;i<P.length;i++){ const d=segDist(wp,P[i],P[(i+1)%P.length]); if(!best||d<best.dist) best={room:r,i:i,dist:d}; } }); return best; }
 // Nearest existing duct-network point — any run vertex, terminal, or equipment point, OR
@@ -1171,7 +1175,9 @@ function ductsPanel(){
       h+='<label>Size</label><input class="df" data-f="size" value="'+(item.size!=null?String(item.size).replace(/"/g,'&quot;'):'')+'">';
       h+=zoneField(item.zone)+'</div>';
     } else {
-      h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(EQUIPMENT_KINDS,item.kind)+'</div><div class="loadgrid">';
+      h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(EQUIPMENT_KINDS,item.kind)
+        +(item.kind==='AH' ? '<br><span style="font-size:11px">Supply: '+(item.supply_cfm!=null?item.supply_cfm+' cfm':'—')+' · Return: '+(item.return_cfm!=null?item.return_cfm+' cfm':'—')+'</span>' : '')
+        +'</div><div class="loadgrid">';
       h+='<label>Label</label><input class="df" data-f="label" value="'+(item.label!=null?String(item.label).replace(/"/g,'&quot;'):'')+'">';
       h+=zoneField(item.zone)+'</div>';
     }
@@ -1197,7 +1203,7 @@ function ductsPanel(){
   h+='<div class="listblock"><h3>Placed ('+total+')</h3><div id="ductList">';
   ductRuns.forEach(d=>{ h+='<div class="row'+(kind==='run'&&id===d.id?' sel':'')+'" data-dcat="run" data-did="'+d.id+'"><span>'+ductLabel(DUCT_RUN_KINDS,d.system)+' · '+ductLabel(DUCT_FORM_OPTS,effectiveForm(d))+'</span><span>'+(d.cfm!=null?d.cfm+' cfm':'—')+'</span></div>'; });
   ductTerminals.forEach(t=>{ h+='<div class="row'+(kind==='terminal'&&id===t.id?' sel':'')+'" data-dcat="terminal" data-did="'+t.id+'"><span>'+ductLabel(TERMINAL_KINDS,t.kind)+'</span><span>'+(t.cfm!=null?t.cfm+' cfm':'—')+'</span></div>'; });
-  ductEquipment.forEach(e=>{ h+='<div class="row'+(kind==='equip'&&id===e.id?' sel':'')+'" data-dcat="equip" data-did="'+e.id+'"><span>'+(e.label||ductLabel(EQUIPMENT_KINDS,e.kind))+'</span><span></span></div>'; });
+  ductEquipment.forEach(e=>{ h+='<div class="row'+(kind==='equip'&&id===e.id?' sel':'')+'" data-dcat="equip" data-did="'+e.id+'"><span>'+(e.label||ductLabel(EQUIPMENT_KINDS,e.kind))+'</span><span>'+(e.kind==='AH'?('S:'+(e.supply_cfm!=null?e.supply_cfm:'—')+' R:'+(e.return_cfm!=null?e.return_cfm:'—')):'')+'</span></div>'; });
   h+='</div></div>';
   return h;
 }

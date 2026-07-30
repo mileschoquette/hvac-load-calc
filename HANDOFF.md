@@ -238,6 +238,56 @@ Deps: `pymupdf shapely networkx matplotlib numpy xlrd pandas` (+ `esprima` for t
     byte-identical before/after) and via `_run_calc()` producing a real `results.html`
     with the section present/absent correctly depending on whether a duct plan was
     supplied; full test suite still green.
+
+    **Phase H — drawing labels + real air-handler proration (2026-07-30) — ✅ DONE.** Two
+    labeling fixes plus a real behavior change, per the user reviewing an actual printed
+    duct drawing: (1) duct run labels no longer show CFM, size only — CFM belongs on the
+    diffuser/equipment labels and in the schedules, not cluttering the trunk/branch lines.
+    (2) **Fixed a real bug**: `size_duct_network` assigned `equipment_cfm[eq_id]` once per
+    `(level, system)` loop iteration, and the same AH roots both its supply group and its
+    return group — the second assignment silently overwrote the first, so an AH's number
+    was always whichever system got computed last, never both, never labeled which one.
+    Now `equipment_cfm` is `{eq_id: {"supply":.., "return":..}}`, and the AH icon/panel/
+    list row all show both, labeled. (3) Diffuser `size` (always in the data model and
+    property panel, never auto-filled) now gets populated from `match_diffuser`'s real
+    catalog match. (4) New behavior: once an AH's theoretical supply total is matched to a
+    real unit, every diffuser downstream of it is rescaled ("prorated") to that unit's
+    actual rated CFM rather than the raw room-load sum (`scale = matched.rated_supply_cfm
+    / theoretical_total`), and every diffuser's final CFM (supply or return) rounds up to
+    the nearest 5 via new `_round_up_5()` — the increment diffuser/grille catalogs are
+    conventionally specified in. New `_collect_subtree_runs()` isolates one AH's own
+    subtree from the shared multi-root BFS `children` map so proration and the post-scale
+    re-sum of `run_cfm`/`subtree_cfm` only touch that AH's own terminals/runs. A terminal
+    never connected to any AH through the drawn network keeps its raw, unrounded per-room
+    share — expected, same "no root, no way to know direction" honesty already used
+    elsewhere in this feature. Built via two parallel worktree-isolated subagents (engine:
+    `engine/ducts.py`/`engine/report.py`/`tests/test_ducts.py`; rendering:
+    `export_review.py` only) against an agreed field contract (`supply_cfm`/`return_cfm`
+    replacing equipment's old single `cfm`; terminals' existing `size` field populated) so
+    neither needed the other's actual code. Both merged cleanly; full `tests/test_*.py`
+    green (including golden_room/golden_building); verified against the real
+    `rooms_edited.json` end-to-end (e.g. AH-1: supply 1,200 / return 1,155 cfm, distinct
+    and both present; diffuser CFMs landing on multiples of 5 with real matched sizes like
+    `14" dia neck`).
+
+    **Phase I — return CFM derived from supply, not computed independently (2026-07-30) —
+    ✅ DONE.** Phase H's AH-proration made supply and return silently diverge per room:
+    both started out equal (same room `required_supply_cfm`, split across each system's
+    terminals), but only supply got rescaled to the matched real AH's rated CFM — return
+    kept its independent, un-prorated value. Per the user: return should just equal
+    supply, always. `size_duct_network` now processes every **supply** group (across all
+    floors) fully — theoretical BFS, AH-match proration, round-up-5 — before touching any
+    **return** group; a new step in between sums each room's now-finalized supply total
+    (`room_supply_totals`, reusing the existing `room_terminal_groups` structure) and
+    overwrites that room's return terminals' CFM with an even split of it — replacing the
+    old independent `required_supply_cfm` calc for return entirely (a room with no supply
+    terminals gets 0 on its return terminals). The return group then runs through the same
+    network-propagation + round-up-5 pass as before, just fed these room-derived leaf
+    values instead. Verified: `tests/test_ducts.py`'s proration test now asserts the return
+    terminal equals the *prorated* supply value (not the raw theoretical one the old code
+    would have produced — the failing case this fix targets); full suite green; ran
+    against the real `rooms_edited.json` and confirmed every room with both supply and
+    return terminals now matches exactly (e.g. Dining 1,080/1,080, Prep 175.1/175.1).
 12. **Air balance / building pressurization report — ✅ DONE.** New report section: checks that the building is never net-negative pressure (outdoor humid air being drawn in through every crack instead of kept out — a real moisture-intrusion risk in FL, not just a comfort issue). The insight that made this tractable: at the BUILDING level, only designed airflows that actually cross the envelope matter — ventilation OA + exhaust-makeup OA (in) vs. total exhaust (out, the *full* exhaust CFM regardless of how much is made up — the fan pulls all of it). Transfer air (the non-makeup portion of exhaust) is a wash at the building level since it moves *within* the building rather than crossing the envelope, so it doesn't need to be modeled as an explicit path between rooms — no new data beyond what item #9 already added. `compute_building` returns a new `air_balance` dict: building totals (Ventilation OA / Exhaust Makeup OA / Total OA In / Exhaust Out / **Net CFM**, negative = under-pressured), the same breakdown per zone (reuses the existing zone grouping), and per room. Infiltration is deliberately excluded from the balance — it's a *symptom* of imbalance, not a reliable designed air source. A room can and often should show net-negative on its own (e.g. a kitchen counting on transfer air from dining) — that's flagged as expected/informational, not a problem; only the BUILDING total is the actual pass/fail check. Verified with a kitchen (30% dedicated makeup, -196 CFM alone) + dining (300 CFM ventilation) pair: building nets to +104 CFM (correctly not flagged) because dining's ventilation air covers both its own need and the kitchen's transfer requirement; a second case with too little dining ventilation (50 CFM) correctly nets to -146 CFM and flags **⚠ NEGATIVE**. **Known gap, disclosed in the report itself:** only exhaust the engineer actually enters counts — a fume hood, dryer vent, or other exhaust source not entered as `exh_cfm` on some room won't be caught by this check.
 
 ## 6. Key decisions & gotchas (don't re-learn these)
