@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from engine import ducts
 from engine.ducts import (required_supply_cfm, round_duct_diameter, rect_duct_width, size_duct_network,
-                           match_diffuser, match_air_handler, match_condensing_unit, duct_report_data)
+                           match_diffuser, match_air_handler, match_condensing_unit, duct_report_data,
+                           _round_up_5)
 
 
 def test_formulas():
@@ -77,17 +78,19 @@ def test_network():
     theoretical1, theoretical2 = 24000.0 / 22.0, 12000.0 / 22.0
     theoretical_total = theoretical1 + theoretical2
     match = match_air_handler(theoretical_total)
-    scale = match["rated_supply_cfm"] / theoretical_total
-    t20_expected = math.ceil((theoretical1 * scale) / 5.0) * 5.0
-    t21_expected = math.ceil((theoretical2 * scale) / 5.0) * 5.0
+    target = _round_up_5(match["rated_supply_cfm"])
 
     t20, t21 = out["duct_terminals"][20]["cfm"], out["duct_terminals"][21]["cfm"]
-    assert abs(t20 - t20_expected) < 0.1
-    assert abs(t21 - t21_expected) < 0.1
-    assert abs(out["duct_runs"][10]["cfm"] - (t20 + t21)) < 0.1   # trunk = sum of both branches
-    assert abs(out["duct_runs"][11]["cfm"] - t20) < 0.1
-    assert abs(out["duct_runs"][12]["cfm"] - t21) < 0.1
-    assert out["duct_equipment"][30]["supply_cfm"] == match["rated_supply_cfm"]
+    # Both terminals land on a multiple of 5, and — the actual point of this rewrite —
+    # they add up to EXACTLY the AH's target, not just approximately (independent
+    # per-terminal round-up used to let the sum drift a few cfm past the AH's real capacity).
+    assert t20 % 5 == 0 and t21 % 5 == 0
+    assert t20 + t21 == target
+    assert abs(t20 / theoretical1 - t21 / theoretical2) < 0.01   # still proportional to load
+    assert out["duct_runs"][10]["cfm"] == t20 + t21   # trunk = sum of both branches
+    assert out["duct_runs"][11]["cfm"] == t20
+    assert out["duct_runs"][12]["cfm"] == t21
+    assert out["duct_equipment"][30]["supply_cfm"] == target
     # the rootless return run has no way to know its flow direction -> left untouched
     assert 13 not in out["duct_runs"]
 
@@ -296,11 +299,8 @@ def test_supply_return_proration():
         out = size_duct_network(review, result)
 
         # Theoretical supply total 750 + 550 = 1300 cfm -> smallest fixture AH covering it
-        # is T2 (2000 cfm, since T1's 1000 doesn't) -> scale = 2000/1300 = 1.538461...
+        # is T2 (2000 cfm, since T1's 1000 doesn't).
         theoretical1, theoretical2 = 750.0, 550.0
-        scale = 2000.0 / (theoretical1 + theoretical2)
-        t50_expected = math.ceil((theoretical1 * scale) / 5.0) * 5.0
-        t51_expected = math.ceil((theoretical2 * scale) / 5.0) * 5.0
 
         t50, t51 = out["duct_terminals"][50]["cfm"], out["duct_terminals"][51]["cfm"]
         t52, t53 = out["duct_terminals"][52]["cfm"], out["duct_terminals"][53]["cfm"]
@@ -311,10 +311,12 @@ def test_supply_return_proration():
         assert out["duct_equipment"][60]["supply_cfm"] == 2000.0
         assert out["duct_equipment"][60]["return_cfm"] is not None
 
-        # (b) both supply terminals are scaled by that same ~1.538x ratio and land on a
-        # multiple of 5.
-        assert t50 == t50_expected and t50 % 5 == 0
-        assert t51 == t51_expected and t51 % 5 == 0
+        # (b) both supply terminals land on a multiple of 5, are proportional to the load
+        # they serve, and — the core of this fix — add up to EXACTLY the AH's 2000 cfm,
+        # not just approximately (independent per-terminal round-up used to let the sum
+        # drift a few cfm past the AH's real capacity, e.g. 1155+850=2005 here).
+        assert t50 % 5 == 0 and t51 % 5 == 0
+        assert t50 + t51 == 2000.0
         assert abs(t50 / theoretical1 - t51 / theoretical2) < 0.01
 
         # (c) room 1's return terminal equals room 1's FINAL (post-proration, post-round-5)
@@ -348,6 +350,65 @@ def test_supply_return_proration():
     print("PASS  duct network supply/return proration + return-follows-supply + rounding")
 
 
+def test_capacity_override_and_exact_room_sums():
+    # Per the user: an engineer should be able to type in what an air handler actually
+    # outputs (instead of trusting the catalog match), and every diffuser downstream of it
+    # must add up to EXACTLY that number. Room 1 also gets THREE return terminals — the
+    # screenshot bug this whole thing is fixing was an aggregate drift (1205 vs 1200) that
+    # only shows up once a room has more than one return terminal splitting the same total,
+    # since each terminal's own independent round-up can overshoot.
+    review = {
+        "rooms": [
+            {"id": 1, "points": [[0, 0], [100, 0], [100, 200], [0, 200]]},
+            {"id": 2, "points": [[200, 0], [300, 0], [300, 200], [200, 200]]},
+        ],
+        "duct_runs": [
+            {"id": 100, "system": "supply", "form": "auto", "points": [[0, 50], [300, 50]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 101, "system": "supply", "form": "auto", "points": [[50, 50], [50, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 102, "system": "supply", "form": "auto", "points": [[250, 50], [250, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 110, "system": "return", "form": "auto", "points": [[0, 50], [80, 50]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 111, "system": "return", "form": "auto", "points": [[20, 50], [20, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 112, "system": "return", "form": "auto", "points": [[40, 50], [40, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 113, "system": "return", "form": "auto", "points": [[60, 50], [60, 150]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+        ],
+        "duct_terminals": [
+            {"id": 200, "kind": "ceiling_supply", "point": [50, 150], "level": 1, "auto": True, "cfm": None},
+            {"id": 201, "kind": "ceiling_supply", "point": [250, 150], "level": 1, "auto": True, "cfm": None},
+            {"id": 210, "kind": "ceiling_return", "point": [20, 150], "level": 1, "auto": True, "cfm": None},
+            {"id": 211, "kind": "ceiling_return", "point": [40, 150], "level": 1, "auto": True, "cfm": None},
+            {"id": 212, "kind": "ceiling_return", "point": [60, 150], "level": 1, "auto": True, "cfm": None},
+        ],
+        # Deliberately not a multiple of 5, and deliberately not near any real catalog
+        # model's rated cfm — proves the override bypasses match_air_handler entirely.
+        "duct_equipment": [{"id": 300, "kind": "AH", "point": [0, 50], "level": 1, "capacity_cfm": 983}],
+    }
+    result = {"rooms": [{"id": 1, "sensible_btuh": 30000.0}, {"id": 2, "sensible_btuh": 15000.0}]}
+    out = size_duct_network(review, result)
+
+    # (a) the override (rounded up to the nearest 5) is what the AH reports, and it's what
+    # the two supply terminals add up to EXACTLY — not whatever a catalog match would give.
+    assert out["duct_equipment"][300]["supply_cfm"] == 985.0
+    t200, t201 = out["duct_terminals"][200]["cfm"], out["duct_terminals"][201]["cfm"]
+    assert t200 % 5 == 0 and t201 % 5 == 0
+    assert t200 + t201 == 985.0
+
+    # (b) the three return terminals in room 1 (which is what makes the independent-rounding
+    # drift show up) add up to EXACTLY room 1's own finalized supply total, t200 — not
+    # merely close to it.
+    t210, t211, t212 = (out["duct_terminals"][210]["cfm"], out["duct_terminals"][211]["cfm"],
+                         out["duct_terminals"][212]["cfm"])
+    assert t210 % 5 == 0 and t211 % 5 == 0 and t212 % 5 == 0
+    assert t210 + t211 + t212 == t200
+    print("PASS  manual AH capacity override + exact per-room supply/return sums")
+
+
 def main():
     test_formulas()
     test_network()
@@ -356,6 +417,7 @@ def main():
     test_match_condensing_unit()
     test_duct_report_data_matching()
     test_supply_return_proration()
+    test_capacity_override_and_exact_room_sums()
 
 
 if __name__ == "__main__":

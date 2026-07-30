@@ -163,6 +163,28 @@ def _round_up_5(cfm):
     return math.ceil(cfm / 5.0) * 5.0
 
 
+def _distribute_exact(values, target):
+    """Rounds each of `values` (id -> ideal continuous cfm) to a multiple of 5 so they sum
+    to EXACTLY `target` (itself rounded up to a multiple of 5) — largest-remainder method:
+    scale every value to the target, floor each to the nearest 5, then hand out the
+    leftover 5-cfm units to whichever ids were closest to rounding up. Ensures an air
+    handler's diffusers always add up to its stated capacity instead of drifting off by
+    whatever each terminal's independent round-up happened to add."""
+    ids = list(values.keys())
+    if not ids:
+        return {}
+    target = _round_up_5(target) if target else 0.0
+    total = sum(values.values())
+    scaled = {i: values[i] * (target / total) for i in ids} if total > 0 else {i: target / len(ids) for i in ids}
+    floors = {i: math.floor(scaled[i] / 5.0) * 5.0 for i in ids}
+    remainder_units = int(round((target - sum(floors.values())) / 5.0))
+    order = sorted(ids, key=lambda i: scaled[i] - floors[i], reverse=True)
+    result = dict(floors)
+    for i in order[:max(0, remainder_units)]:
+        result[i] += 5.0
+    return result
+
+
 def _closest_on_seg(p, a, b):
     """Closest point on segment a-b to p, and the distance to it."""
     ax, ay = a
@@ -380,16 +402,23 @@ def size_duct_network(review, result, design=None):
             subtree_cfm[id(r)] = total
             run_cfm[r["id"]] = total
 
-        # 2b. Proration: the BFS pass above gives each terminal/run a THEORETICAL cfm (pure
-        # room-load arithmetic). Real equipment only comes in discrete rated sizes, so once
-        # an AH's supply subtree is matched to a real unit, every terminal downstream of it
-        # gets scaled to that unit's actual rated airflow and rounded up to the nearest 5
-        # cfm (the increment diffuser/grille catalogs use) — return terminals just get the
-        # same rounding, with no scaling (there's no "rated return cfm" to prorate against).
-        # `subtree_cfm`/`run_cfm` are then re-summed for just this subtree so duct sizing
-        # (step 3) picks up these final numbers instead of the pre-prorate ones.
+        # 2b. Proration (supply only): the BFS pass above gives each terminal/run a
+        # THEORETICAL cfm (pure room-load arithmetic). Real equipment only comes in
+        # discrete rated sizes, so once an AH's supply subtree is matched to a real unit —
+        # or the engineer types in their own `capacity_cfm` override on the equipment —
+        # every terminal downstream of it is rescaled to that target and split across the
+        # terminals with `_distribute_exact` (largest-remainder rounding), so they always
+        # add up to EXACTLY the air handler's stated capacity rather than drifting off by
+        # whatever each terminal's independent round-up happened to add. Return terminals
+        # need no rescaling here — step 2c below already made each room's return total
+        # exactly match that room's own finalized supply total, so this just totals them up
+        # for the AH's own label. `subtree_cfm`/`run_cfm` are then re-summed for just this
+        # subtree so duct sizing (step 3) picks up these final numbers instead of the
+        # pre-prorate ones.
         for eq in roots:
             eq_root_runs = [r for r in group if _point_touches_run(eq["point"], r["points"])]
+            if not eq_root_runs:
+                continue   # some OTHER AH in this level roots this group; this one has nothing here
             subtree_runs = _collect_subtree_runs(eq_root_runs, children)
             seen_ids = set()
             my_terminals = []
@@ -398,19 +427,24 @@ def size_duct_network(review, result, design=None):
                     if t["id"] not in seen_ids:
                         seen_ids.add(t["id"])
                         my_terminals.append(t)
-            theoretical_total = sum(terminal_cfm.get(t["id"], 0.0) for t in my_terminals)
 
             if system == "supply":
-                match = match_air_handler(theoretical_total) if theoretical_total > 0 else None
-                real_cfm = match["rated_supply_cfm"] if match else None
-                scale = (real_cfm / theoretical_total) if (real_cfm and theoretical_total) else 1.0
+                theoretical_total = sum(terminal_cfm.get(t["id"], 0.0) for t in my_terminals)
+                override = eq.get("capacity_cfm")
+                if override:
+                    target = float(override)
+                else:
+                    match = match_air_handler(theoretical_total) if theoretical_total > 0 else None
+                    target = match["rated_supply_cfm"] if match else theoretical_total
+                target = _round_up_5(target) if target else 0.0
+                values = {t["id"]: terminal_cfm.get(t["id"], 0.0) for t in my_terminals}
+                dist = _distribute_exact(values, target)
                 for t in my_terminals:
-                    terminal_cfm[t["id"]] = _round_up_5(terminal_cfm.get(t["id"], 0.0) * scale)
-                equipment_cfm.setdefault(eq["id"], {})["supply"] = real_cfm if real_cfm is not None else theoretical_total
+                    terminal_cfm[t["id"]] = dist[t["id"]]
+                equipment_cfm.setdefault(eq["id"], {})["supply"] = target
             else:
-                for t in my_terminals:
-                    terminal_cfm[t["id"]] = _round_up_5(terminal_cfm.get(t["id"], 0.0))
-                equipment_cfm.setdefault(eq["id"], {})["return"] = sum(terminal_cfm[t["id"]] for t in my_terminals)
+                equipment_cfm.setdefault(eq["id"], {})["return"] = sum(
+                    terminal_cfm.get(t["id"], 0.0) for t in my_terminals)
 
             subtree_ids = {id(r) for r in subtree_runs}
             for r in reversed([o for o in order if id(o) in subtree_ids]):
@@ -426,10 +460,14 @@ def size_duct_network(review, result, design=None):
             _process_group(level, system, group)
 
     # 2c. Return terminal CFM = that room's now-finalized (post-proration, post-round-up-5)
-    # supply CFM total, split evenly across that room's return terminals — not an
-    # independent `required_supply_cfm(sensible_btuh)` calc, so return always matches supply
-    # even after the AH-match proration above rescaled supply away from its theoretical
-    # value. A room with no supply terminals gets 0 on its return terminals.
+    # supply CFM total, distributed EXACTLY (via `_distribute_exact`, not an independent
+    # round per terminal) across that room's return terminals — so a room's return total
+    # always matches its supply total to the cfm, even after the AH-match proration above
+    # rescaled supply away from its theoretical value, and even when a room has several
+    # return terminals whose individual round-ups would otherwise drift the room's total off
+    # by a few cfm (which is what let an AH's aggregate return total drift off its aggregate
+    # supply total in the first place). Not an independent `required_supply_cfm` calc. A
+    # room with no supply terminals gets 0 on its return terminals.
     room_supply_totals = {}
     for (room_id, is_supply), group in room_terminal_groups.items():
         if is_supply:
@@ -437,9 +475,9 @@ def size_duct_network(review, result, design=None):
     for (room_id, is_supply), group in room_terminal_groups.items():
         if is_supply:
             continue
-        share = room_supply_totals.get(room_id, 0.0) / len(group) if group else 0.0
+        dist = _distribute_exact({t["id"]: 1.0 for t in group}, room_supply_totals.get(room_id, 0.0))
         for t in group:
-            terminal_cfm[t["id"]] = share
+            terminal_cfm[t["id"]] = dist[t["id"]]
 
     for (level, system), group in by_key.items():
         if system == "return":

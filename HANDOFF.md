@@ -288,6 +288,37 @@ Deps: `pymupdf shapely networkx matplotlib numpy xlrd pandas` (+ `esprima` for t
     would have produced — the failing case this fix targets); full suite green; ran
     against the real `rooms_edited.json` and confirmed every room with both supply and
     return terminals now matches exactly (e.g. Dining 1,080/1,080, Prep 175.1/175.1).
+
+    **Phase J — engineer-editable AH capacity + exact-sum rounding (2026-07-30) — ✅ DONE.**
+    A real duct drawing showed AH-1 supply/return as 1,200/1,205 — a room whose supply
+    total is 1,300 (say) but has 2+ return terminals could see 750/550 round independently
+    to 750/555 instead of splitting to add up to exactly 1,300, and that drift compounds
+    across every room an AH serves. Per the user: (1) the engineer should be able to type in
+    what an air handler actually outputs (not just trust the catalog-match guess), and (2)
+    whatever that number is, every diffuser downstream must add up to EXACTLY it, never
+    approximately. New `duct_equipment` field `capacity_cfm` (blank by default) — when set,
+    `size_duct_network` uses it directly as the AH's supply target instead of calling
+    `match_air_handler`. New `_distribute_exact(values, target)`: scales a set of ideal
+    per-terminal cfm values to a target total, floors each to the nearest 5, then hands out
+    the leftover 5-cfm units to whichever terminals were closest to rounding up
+    (largest-remainder method) — so the terminals always sum to EXACTLY `target` (itself
+    rounded up to 5) instead of drifting by whatever each terminal's independent round-up
+    added. Applied in two places: the AH supply subtree (target = override or matched
+    catalog cfm), and — the actual fix for the screenshot bug — step 2c's per-ROOM return
+    distribution (target = that room's own finalized supply total), since the drift was a
+    same-room rounding problem, not an AH-wide one; giving the whole AH subtree a single
+    blanket return target instead would have broken Phase I's "return matches supply" rule
+    for rooms without their own return terminal. New editable "Capacity override (cfm)"
+    number field in the AH property panel (`export_review.py`'s `ductsPanel()`), wired
+    through the existing generic `.df` input handler — no dedicated JS needed. Verified: new
+    `test_capacity_override_and_exact_room_sums` (override bypasses catalog match, 2 supply
+    terminals sum to exactly the override, 3 return terminals in one room sum to exactly
+    that room's supply) plus rewritten `test_network`/`test_supply_return_proration`
+    assertions (exact-sum instead of independent-ceil magic numbers); full suite green; ran
+    live in the browser against the real project — AH-1 went from 1,200/1,155 (stale saved
+    state) to 1,200/1,200 after Auto-Size, then typing `1000` into the new field and
+    re-running Auto-Size rescaled its two diffusers from 900/100 (previously 1080/120) to
+    still sum to exactly 1,000.
 12. **Air balance / building pressurization report — ✅ DONE.** New report section: checks that the building is never net-negative pressure (outdoor humid air being drawn in through every crack instead of kept out — a real moisture-intrusion risk in FL, not just a comfort issue). The insight that made this tractable: at the BUILDING level, only designed airflows that actually cross the envelope matter — ventilation OA + exhaust-makeup OA (in) vs. total exhaust (out, the *full* exhaust CFM regardless of how much is made up — the fan pulls all of it). Transfer air (the non-makeup portion of exhaust) is a wash at the building level since it moves *within* the building rather than crossing the envelope, so it doesn't need to be modeled as an explicit path between rooms — no new data beyond what item #9 already added. `compute_building` returns a new `air_balance` dict: building totals (Ventilation OA / Exhaust Makeup OA / Total OA In / Exhaust Out / **Net CFM**, negative = under-pressured), the same breakdown per zone (reuses the existing zone grouping), and per room. Infiltration is deliberately excluded from the balance — it's a *symptom* of imbalance, not a reliable designed air source. A room can and often should show net-negative on its own (e.g. a kitchen counting on transfer air from dining) — that's flagged as expected/informational, not a problem; only the BUILDING total is the actual pass/fail check. Verified with a kitchen (30% dedicated makeup, -196 CFM alone) + dining (300 CFM ventilation) pair: building nets to +104 CFM (correctly not flagged) because dining's ventilation air covers both its own need and the kitchen's transfer requirement; a second case with too little dining ventilation (50 CFM) correctly nets to -146 CFM and flags **⚠ NEGATIVE**. **Known gap, disclosed in the report itself:** only exhaust the engineer actually enters counts — a fume hood, dryer vent, or other exhaust source not entered as `exh_cfm` on some room won't be caught by this check.
 
 ## 6. Key decisions & gotchas (don't re-learn these)

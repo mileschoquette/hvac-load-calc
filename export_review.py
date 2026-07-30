@@ -1179,6 +1179,9 @@ function ductsPanel(){
         +(item.kind==='AH' ? '<br><span style="font-size:11px">Supply: '+(item.supply_cfm!=null?item.supply_cfm+' cfm':'—')+' · Return: '+(item.return_cfm!=null?item.return_cfm+' cfm':'—')+'</span>' : '')
         +'</div><div class="loadgrid">';
       h+='<label>Label</label><input class="df" data-f="label" value="'+(item.label!=null?String(item.label).replace(/"/g,'&quot;'):'')+'">';
+      if(item.kind==='AH'){
+        h+='<label>Capacity override (cfm)</label><input type="number" step="any" class="df" data-f="capacity_cfm" value="'+(item.capacity_cfm!=null?item.capacity_cfm:'')+'" title="Leave blank to auto-match a catalog unit to the theoretical load. Set this to whatever this air handler actually outputs and every diffuser downstream of it will be sized to add up to exactly that number.">';
+      }
       h+=zoneField(item.zone)+'</div>';
     }
     h+='<button class="danger" id="ductDel">Delete this item</button>';
