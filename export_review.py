@@ -19,6 +19,21 @@ _TYPE_KEYS = ("room_types", "wall_types", "roof_types", "floor_types",
               "door_types", "glass_types", "project_settings")
 
 
+def _logo_html():
+    """Adicot wordmark for the top bar, embedded as base64 (keeps review.html
+    self-contained — no external file reference to break when the file moves).
+    Falls back to plain text if the logo file isn't present in this checkout."""
+    logo_path = Path(__file__).resolve().parent / "adicot logo.jpg"
+    try:
+        b64 = base64.b64encode(logo_path.read_bytes()).decode()
+        return f'<img class="logo" src="data:image/jpeg;base64,{b64}" alt="Adicot">'
+    except Exception:
+        return "<b>Room Review</b>"
+
+
+_LOGO_HTML = _logo_html()
+
+
 def find_types_json():
     """Look in the script's folder for a load-calc types file dropped in from the
     Adicot site (loadcalc_input.json or any *loadcalc*.json). Returns (dict, name)
@@ -113,7 +128,7 @@ def export(pdf, ppf, min_len=1.0, pages=(0,), out="review.html", labels=None):
     else:
         print("no *loadcalc*.json in folder — using seeded default types")
 
-    html = HTML.replace("/*__DATA__*/", json.dumps(data))
+    html = HTML.replace("/*__DATA__*/", json.dumps(data)).replace("<!--__LOGO__-->", _LOGO_HTML)
     with open(out, "w") as f:
         f.write(html)
     print(f"wrote {out}  rooms={len(rdata)}  size={len(html)//1024} KB")
@@ -163,17 +178,22 @@ def resume(rooms_edited_path, existing_html="review.html", out="review.html"):
 
     for k in ("rooms", "openings", "wall_types", "roof_types",
               "floor_types", "glass_types", "door_types", "room_types", "zones",
-              "safety_factors", "project_settings", "pdf_stem"):
+              "safety_factors", "project_settings", "pdf_stem",
+              "duct_runs", "duct_terminals", "duct_equipment"):
         if k in saved:
             data[k] = saved[k]
         elif k in base:
             data[k] = base[k]
 
-    # A room saved before multi-floor existed has no `level` at all — it belongs
-    # to (the only) Floor 1.
+    # A room (or duct entity) saved before multi-floor existed has no `level` at
+    # all — it belongs to (the only) Floor 1.
     if "rooms" in data:
         for r in data["rooms"]:
             r.setdefault("level", 1)
+    for k in ("duct_runs", "duct_terminals", "duct_equipment"):
+        if k in data:
+            for d in data[k]:
+                d.setdefault("level", 1)
 
     # room_types saved before the fix for the seedLoads/RT_REC bug are bare name
     # strings, not the full DM record (lighting/equipment/people/etc.) that loads
@@ -185,7 +205,7 @@ def resume(rooms_edited_path, existing_html="review.html", out="review.html"):
         data["room_types"] = [base_by_name.get(rt, {"name": rt}) if isinstance(rt, str) else rt
                               for rt in data["room_types"]]
 
-    html = HTML.replace("/*__DATA__*/", json.dumps(data))
+    html = HTML.replace("/*__DATA__*/", json.dumps(data)).replace("<!--__LOGO__-->", _LOGO_HTML)
     with open(out, "w") as f:
         f.write(html)
     print(f"resumed {out}  rooms={len(data.get('rooms', []))}  size={len(html)//1024} KB")
@@ -194,75 +214,109 @@ def resume(rooms_edited_path, existing_html="review.html", out="review.html"):
 HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Load Calc — Room Review</title>
 <style>
+  :root {
+    --ink:#111827; --ink-soft:#475569; --ink-muted:#6b7280; --ink-faint:#cbd5e1;
+    --surface:#ffffff; --surface-alt:#f3f4f6; --surface-soft:#f8fafc;
+    --surface-tint:#eff6ff; --surface-tint-2:#dbeafe; --surface-subtle:#f1f5f9;
+    --border:#e5e7eb; --border-soft:#f1f5f9; --input-border:#d1d5db;
+    --bar-bg:#1f2937; --bar-text:#ffffff; --btn-bg:#374151; --btn-bg-hover:#4b5563;
+    --accent:#2563eb; --success:#059669; --success-hover:#047857;
+    --danger-bg:#fee2e2; --danger-text:#b91c1c; --danger:#ef4444;
+    --warn-bg:#fffbeb; --warn-text:#92400e; --warn-border:#fde68a;
+    --tab-bg:#eef2f7;
+  }
+  html[data-theme="dark"] {
+    --ink:#e5e7eb; --ink-soft:#cbd5e1; --ink-muted:#94a3b8; --ink-faint:#64748b;
+    --surface:#111827; --surface-alt:#0b1220; --surface-soft:#1e293b;
+    --surface-tint:#1e3a5f; --surface-tint-2:#1d4ed8; --surface-subtle:#1e293b;
+    --border:#1f2937; --border-soft:#1e293b; --input-border:#334155;
+    --bar-bg:#0b1220; --bar-text:#e5e7eb; --btn-bg:#1e293b; --btn-bg-hover:#334155;
+    --accent:#3b82f6; --success:#10b981; --success-hover:#34d399;
+    --danger-bg:#3f1d1d; --danger-text:#fca5a5; --danger:#f87171;
+    --warn-bg:#3f2d0f; --warn-text:#fbbf24; --warn-border:#78350f;
+    --tab-bg:#1e293b;
+  }
   * { box-sizing: border-box; }
-  html,body { margin:0; height:100%; font-family: -apple-system, system-ui, sans-serif; }
+  html,body { margin:0; height:100%; font-family: -apple-system, system-ui, sans-serif; background:var(--surface); color:var(--ink); }
   #app { display:flex; flex-direction:column; height:100vh; }
-  #bar { display:flex; align-items:center; gap:8px; padding:8px 12px; background:#1f2937; color:#fff; }
+  #bar { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--bar-bg); color:var(--bar-text); }
   #bar b { font-size:15px; margin-right:10px; }
-  #bar button { background:#374151; color:#fff; border:0; padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
-  #bar button:hover { background:#4b5563; }
-  #bar button.on { background:#2563eb; }
-  #bar button.primary { background:#059669; }
-  #bar button.primary:hover { background:#047857; }
+  #bar .logo { height:26px; margin-right:10px; display:block; }
+  #bar button { background:var(--btn-bg); color:var(--bar-text); border:0; padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  #bar button:hover { background:var(--btn-bg-hover); }
+  #bar button.on { background:var(--accent); }
+  #bar button.primary { background:var(--success); }
+  #bar button.primary:hover { background:var(--success-hover); }
   #bar button:disabled { opacity:.6; cursor:default; }
   #bar .sp { flex:1; }
   #bar .stat { font-variant-numeric:tabular-nums; opacity:.9; font-size:13px; }
-  #bar .ruler-stat { font-variant-numeric:tabular-nums; font-size:13px; color:#fde68a; margin-right:4px; }
+  #bar .ruler-stat { font-variant-numeric:tabular-nums; font-size:13px; color:var(--warn-border); margin-right:4px; }
+  #bar .theme-toggle { background:transparent; border:1px solid var(--btn-bg-hover); font-size:15px; padding:5px 9px; }
   #main { flex:1; display:flex; min-height:0; overflow:hidden; }
-  #cv { flex:1 1 0; min-width:0; min-height:0; background:#f3f4f6; cursor:grab; }
+  #cv { flex:1 1 0; min-width:0; min-height:0; background:var(--surface-alt); cursor:grab; }
   #cv.draw { cursor:crosshair; }
   #cv.measure { cursor:crosshair; }
-  #side { width:380px; flex:0 0 380px; background:#fff; border-left:1px solid #e5e7eb; display:flex; flex-direction:column; overflow:hidden; }
+  #side { width:380px; flex:0 0 380px; background:var(--surface); color:var(--ink); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
   #side .selblock { padding:14px; flex:0 0 auto; overflow:auto; max-height:55%; }
-  #side .listblock { padding:0 14px 14px; flex:1 1 auto; min-height:160px; overflow:auto; border-top:1px solid #eee; }
-  #side .listblock h3 { position:sticky; top:0; background:#fff; padding-top:12px; margin-top:0; }
-  #side h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; }
-  #side label { display:block; font-size:12px; color:#6b7280; margin:10px 0 3px; }
-  #side input, #side select { width:100%; padding:7px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; }
+  #side .listblock { padding:0 14px 14px; flex:1 1 auto; min-height:160px; overflow:auto; border-top:1px solid var(--border); }
+  #side .listblock h3 { position:sticky; top:0; background:var(--surface); padding-top:12px; margin-top:0; }
+  #side h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-muted); }
+  #side label { display:block; font-size:12px; color:var(--ink-muted); margin:10px 0 3px; }
+  #side input, #side select { width:100%; padding:7px; border:1px solid var(--input-border); border-radius:6px; font-size:14px; background:var(--surface); color:var(--ink); }
   #side .area { font-size:26px; font-weight:600; margin:6px 0; }
-  #side .danger { background:#fee2e2; color:#b91c1c; border:0; padding:8px; width:100%; border-radius:6px; cursor:pointer; margin-top:12px; }
+  #side .danger { background:var(--danger-bg); color:var(--danger-text); border:0; padding:8px; width:100%; border-radius:6px; cursor:pointer; margin-top:12px; }
   #list { margin-top:8px; }
   #list .row { display:flex; justify-content:space-between; padding:8px; border-radius:6px; cursor:pointer; font-size:13px; }
-  #list .row:hover { background:#f3f4f6; }
-  #list .row.sel { background:#dbeafe; }
-  #hint { padding:8px 12px; background:#fffbeb; color:#92400e; font-size:13px; border-top:1px solid #fde68a; display:none; }
+  #list .row:hover { background:var(--surface-alt); }
+  #list .row.sel { background:var(--surface-tint-2); }
+  #hint { padding:8px 12px; background:var(--warn-bg); color:var(--warn-text); font-size:13px; border-top:1px solid var(--warn-border); display:none; }
   #hint.show { display:block; }
   #cv.paint { cursor:crosshair; }
   .tabs { display:flex; gap:6px; padding:10px 14px 0; flex:0 0 auto; }
-  .tab { flex:1; padding:8px; border:0; background:#eef2f7; border-radius:7px 7px 0 0; cursor:pointer; font-size:13px; font-weight:600; color:#475569; }
-  .tab.on { background:#1f2937; color:#fff; }
+  .tab { flex:1; padding:8px; border:0; background:var(--tab-bg); border-radius:7px 7px 0 0; cursor:pointer; font-size:13px; font-weight:600; color:var(--ink-soft); }
+  .tab.on { background:var(--bar-bg); color:var(--bar-text); }
   .types { display:flex; flex-direction:column; gap:5px; margin:6px 0 10px; }
-  .chip { display:flex; align-items:center; gap:8px; padding:7px 8px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; font-size:12.5px; }
-  .chip:hover { background:#f8fafc; }
-  .chip.on { border-color:#2563eb; background:#eff6ff; box-shadow:inset 0 0 0 1px #2563eb; }
+  .chip { display:flex; align-items:center; gap:8px; padding:7px 8px; border:1px solid var(--border); border-radius:8px; cursor:pointer; font-size:12.5px; }
+  .chip:hover { background:var(--surface-soft); }
+  .chip.on { border-color:var(--accent); background:var(--surface-tint); box-shadow:inset 0 0 0 1px var(--accent); }
   .chip .sw { width:14px; height:14px; border-radius:4px; flex:0 0 auto; }
   .chip .nm { flex:1; }
-  .chip .u { color:#6b7280; font-variant-numeric:tabular-nums; }
-  .chip .edit { color:#cbd5e1; cursor:pointer; padding:0 2px; font-size:11px; }
-  .chip .edit:hover { color:#2563eb; }
-  .chip .del { color:#cbd5e1; cursor:pointer; padding:0 2px; font-size:11px; }
-  .chip .del:hover { color:#ef4444; }
-  .chip .copy { color:#cbd5e1; cursor:pointer; padding:0 2px; font-size:11px; }
-  .chip .copy:hover { color:#059669; }
-  .con-add { background:#f1f5f9; border:1px dashed #cbd5e1; color:#475569; padding:7px; width:100%; border-radius:8px; cursor:pointer; font-size:12.5px; margin-bottom:14px; }
-  .type-form { border:1px solid #2563eb; border-radius:8px; padding:8px 10px; margin-bottom:14px; background:#eff6ff; }
+  .chip .u { color:var(--ink-muted); font-variant-numeric:tabular-nums; }
+  .chip .edit { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .edit:hover { color:var(--accent); }
+  .chip .del { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .del:hover { color:var(--danger); }
+  .chip .copy { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .copy:hover { color:var(--success); }
+  .con-add { background:var(--surface-subtle); border:1px dashed var(--ink-faint); color:var(--ink-soft); padding:7px; width:100%; border-radius:8px; cursor:pointer; font-size:12.5px; margin-bottom:14px; }
+  .type-form { border:1px solid var(--accent); border-radius:8px; padding:8px 10px; margin-bottom:14px; background:var(--surface-tint); }
   .type-form .loadgrid { margin:4px 0 8px; }
   .type-form .tf-row { display:flex; gap:8px; margin-top:4px; }
-  .type-form .tf-save { flex:1; background:#2563eb; color:#fff; border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
-  .type-form .tf-cancel { flex:1; background:#e5e7eb; color:#374151; border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
+  .type-form .tf-save { flex:1; background:var(--accent); color:#fff; border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
+  .type-form .tf-cancel { flex:1; background:var(--border); color:var(--ink-soft); border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
   .loadgrid { display:grid; grid-template-columns:1fr 92px; gap:5px 8px; align-items:center; margin:10px 0; }
-  .loadgrid label { margin:0; font-size:11.5px; color:#475569; }
+  .loadgrid label { margin:0; font-size:11.5px; color:var(--ink-soft); }
   .loadgrid input { padding:5px 6px; }
-  #bar .north { font-size:12px; color:#cbd5e1; }
-  #bar .north input { width:52px; padding:4px; border:0; border-radius:5px; margin-left:2px; }
-  #bar .north select { padding:4px; border:0; border-radius:5px; margin-left:2px; }
+  #bar .north { font-size:12px; color:var(--ink-faint); }
+  #bar .north input { width:52px; padding:4px; border:0; border-radius:5px; margin-left:2px; background:var(--surface); color:var(--ink); }
+  #bar .north select { padding:4px; border:0; border-radius:5px; margin-left:2px; background:var(--surface); color:var(--ink); }
   .walls-list { margin:10px 0; font-size:11.5px; }
-  .walls-list .wl-h { color:#6b7280; margin-bottom:3px; }
-  .walls-list .wl-row { display:grid; grid-template-columns:36px 1fr 52px; gap:6px; padding:2px 0; border-top:1px solid #f1f5f9; }
+  .walls-list .wl-h { color:var(--ink-muted); margin-bottom:3px; }
+  .walls-list .wl-row { display:grid; grid-template-columns:36px 1fr 52px; gap:6px; padding:2px 0; border-top:1px solid var(--border-soft); }
+  .filter-box { width:100%; padding:6px 8px; margin:4px 0 8px; border:1px solid var(--input-border); border-radius:6px; font-size:12.5px; background:var(--surface); color:var(--ink); }
+  .legend { font-size:11px; color:var(--ink-muted); padding:8px 12px; border-top:1px solid var(--border); }
+  .legend summary { cursor:pointer; color:var(--ink-soft); font-weight:600; }
+  .legend .lg-row { display:flex; align-items:center; gap:6px; margin:4px 0 0 2px; }
+  .legend .lg-sw { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--bar-bg); color:var(--bar-text);
+    padding:10px 16px; border-radius:8px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25); z-index:50;
+    opacity:0; pointer-events:none; transition:opacity .15s; max-width:520px; text-align:center; white-space:pre-line; }
+  .toast.show { opacity:1; pointer-events:auto; cursor:pointer; }
+  .toast.err { background:var(--danger-text); }
 </style></head>
 <body><div id="app">
   <div id="bar">
-    <b>Room Review</b>
+    <!--__LOGO__-->
     <span class="north" title="Switch which floor's plan you're viewing/editing. Each floor keeps its own rooms, drawing scale, and North setting.">Floor <select id="bFloor"></select></span>
     <button id="bAdd">+ Add Room</button>
     <button id="bDel">Delete</button>
@@ -271,23 +325,70 @@ HTML = r"""<!doctype html>
     <span class="north">North° <input id="bNorth" type="number" step="1" value="0"></span>
     <span class="north" title="Recalibrates THIS FLOOR's drawing scale so its rooms drawn so far add up to this — enter this floor's actual total square footage, not a guess.">Total ft² <input id="bTotalSqft" type="number" step="1" placeholder="e.g. 12500"></span>
     <button id="bMatchSqft">Match</button>
-    <span class="north" title="Design margin on top of the calculated loads, project-wide. Room = envelope + internal gains; Vent = ventilation/infiltration/exhaust-makeup outdoor air — tracked separately since DM's own report does. Defaults (5/0/10/0%) are pre-filled with a rationale footnoted on the results report; edit here to override for this project.">SF% Clg Room <input id="bSfClgRoom" type="number" step="1" value="5"> Clg Vent <input id="bSfClgVent" type="number" step="1" value="0"> Htg Room <input id="bSfHtgRoom" type="number" step="1" value="10"> Htg Vent <input id="bSfHtgVent" type="number" step="1" value="0"></span>
     <button id="bSave">Save JSON</button>
     <button id="bRunCalc" class="primary">▶ Run Load Calc</button>
     <span class="sp"></span>
     <span class="ruler-stat" id="rulerStat"></span>
     <span class="stat" id="stat"></span>
+    <button class="theme-toggle" id="bTheme" title="Toggle light/dark theme">🌙</button>
+    <button class="theme-toggle" id="bDuctView" title="Toggle duct centerline markup: Engineer view shows supply(blue)/return(orange) centerlines; Client view hides them for a submittal-ready drawing">🔧 Engineer</button>
   </div>
   <div id="main">
     <canvas id="cv"></canvas>
     <div id="side"></div>
   </div>
   <div id="hint"></div>
+  <details class="legend">
+    <summary>What do the colors mean?</summary>
+    <div class="lg-row">Room fill tint = its assigned <b>Roof type</b>'s color (matches that type's swatch in the Construction tab)</div>
+    <div class="lg-row">Wall edge color = its assigned <b>Wall type</b>'s color; a thin faint line = "No wall load"</div>
+    <div class="lg-row"><span class="lg-sw" style="background:#0284c7"></span> Window opening</div>
+    <div class="lg-row"><span class="lg-sw" style="background:#a16207"></span> Door opening</div>
+    <div class="lg-row"><span class="lg-sw" style="background:#7c3aed"></span> ◆ Zone label (below the room name)</div>
+    <div class="lg-row">▲ Roof label &nbsp;·&nbsp; ▼ Floor label (shown when assigned, below the room name)</div>
+    <div class="lg-row">Tip: every type's swatch color in the <b>Construction</b> tab is exactly what you'll see drawn on the plan.</div>
+  </details>
+  <details class="legend">
+    <summary>Duct / HVAC Symbols</summary>
+    <div class="lg-row"><b>Ductwork</b> (black — matches the plan's own line weight, same as a real submittal set)</div>
+    <div class="lg-row">Double-line outline = Rigid trunk (rect, sized W×H) or a Round duct (sized by diameter) — both true to scale, labeled with size (e.g. "18X18" or "10Ø")</div>
+    <div class="lg-row">Corrugated/coiled outline = Flexible insulated branch, labeled with diameter + CFM (e.g. "6Ø · 120 cfm")</div>
+    <div class="lg-row">Rect/Round/Flex is figured out automatically from how runs connect — a run stays rect unless it tees off another run's middle, which makes it a flex branch with a plain round collar (no taper) at the takeoff, like a real spin-in fitting. Select a run — edit it exactly like a room: drag a dot to move it, alt/right-click a dot to delete it, click an orange + at a midpoint to add one, drag the body to move the whole run. Shift-click an interior dot to split the run into two independent pieces, then force either piece's Form (Auto/Rect/Round/Flex) in the side panel if the auto result isn't what you want.</div>
+    <div class="lg-row"><b>Diffusers &amp; Grilles</b></div>
+    <div class="lg-row">▢ Ceiling supply diffuser &nbsp;·&nbsp; ◯ Ceiling return &nbsp;·&nbsp; → Sidewall supply/return (blue outline = supply, green = return)</div>
+    <div class="lg-row"><b>Equipment</b></div>
+    <div class="lg-row">▢ Air Handler (AH-#) &nbsp;·&nbsp; ▢ Dehumidifier (DH-#) &nbsp;·&nbsp; ◯ Condensing Unit (CU-#)</div>
+    <div class="lg-row"><b>Engineer markup (toggle with the 🔧/📄 button in the top bar)</b></div>
+    <div class="lg-row"><span class="lg-sw" style="background:#1d4ed8"></span> Supply duct centerline &nbsp;·&nbsp; <span class="lg-sw" style="background:#f97316"></span> Return duct centerline — engineer-only, hidden in Client view for a clean submittal drawing</div>
+    <div class="lg-row"><b>Keyboard shortcuts</b> (focus the canvas first)</div>
+    <div class="lg-row">1-2 = draw a run (Supply/Return) &nbsp;·&nbsp; Shift+1-4 = place a terminal (Ceil Sup/Ret, Sidewall Sup/Ret) &nbsp;·&nbsp; Alt+1-3 = place equipment (AH/CU/DH)</div>
+    <div class="lg-row">While drawing a run: Enter/Esc stops; double-click finishes a run and stays armed for the next one; points snap to nearby network points, otherwise to 45°</div>
+  </details>
+  <div id="toast" class="toast"></div>
 </div>
 <script>const REVIEW_DATA = /*__DATA__*/;</script>
 <script>
 const D = REVIEW_DATA;
 const PDF_STEM = D.pdf_stem || null;   // the dropped PDF's filename (no extension) — names the saved JSON after it
+
+// Theme: persisted in localStorage (per-browser, not saved into rooms_edited.json —
+// a display preference, not project data). Applied on <html> so :root variables cascade
+// everywhere, including the side-panel forms.
+function applyTheme(t){ document.documentElement.setAttribute('data-theme', t);
+  const b=document.getElementById('bTheme'); if(b) b.textContent = t==='dark' ? '☀️' : '🌙'; }
+applyTheme(localStorage.getItem('loadcalc-theme') || 'light');
+
+// Inline toast, replacing native alert() popups (which looked out of place next to the
+// rest of this UI's inline forms). Errors stay up longer and are click-to-dismiss, since
+// some of them are multi-line troubleshooting text the engineer needs time to read.
+let toastTimer=null;
+function showToast(msg, isErr){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast show'+(isErr?' err':'');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ t.className='toast'; }, isErr?8000:2200);
+}
+document.getElementById('toast').onclick=()=>{ clearTimeout(toastTimer); document.getElementById('toast').className='toast'; };
 
 // ── Multi-floor state ────────────────────────────────────────────────────────
 // Each floor keeps its own plan image/scale/north AND its own rooms/openings.
@@ -314,15 +415,42 @@ let nextId = _allRooms.reduce((m,r)=>Math.max(m,r.id),-1)+1;
 const _allOpenings = (D.openings||[]).map(o=>Object.assign({},o));
 let opId = _allOpenings.reduce((m,o)=>Math.max(m,o.id),-1)+1;
 
+// Duct entities — same shape of per-floor bookkeeping as rooms/openings above, not a
+// wall-attached thing like openings, so each carries its own `level` directly (no need
+// to look it up via a parent room).
+// A run saved before rect/round/flex became auto-classified has a flat `kind` string
+// (rigid_supply/rigid_return/flex_supply/flex_return) instead of separate `system`/`form`
+// fields — migrate once on load, preserving whatever was explicitly drawn before (never
+// silently reclassifies old data as 'auto').
+const _allDuctRuns = (D.duct_runs||[]).map(d=>{
+  const r = Object.assign({level:(d.level!=null?d.level:1)}, d);
+  if(r.system==null && r.kind!=null){ r.system = r.kind.indexOf('supply')>=0 ? 'supply' : 'return'; r.form = r.kind.indexOf('rigid')===0 ? 'rect' : 'flex'; delete r.kind; }
+  if(r.form==null) r.form = 'auto';
+  return r;
+});
+let nextDuctRunId = _allDuctRuns.reduce((m,d)=>Math.max(m,d.id),-1)+1;
+const _allDuctTerminals = (D.duct_terminals||[]).map(t=>Object.assign({level:(t.level!=null?t.level:1)}, t));
+let nextTerminalId = _allDuctTerminals.reduce((m,t)=>Math.max(m,t.id),-1)+1;
+const _allDuctEquipment = (D.duct_equipment||[]).map(e=>Object.assign({level:(e.level!=null?e.level:1)}, e));
+let nextEquipId = _allDuctEquipment.reduce((m,e)=>Math.max(m,e.id),-1)+1;
+
 const floorRoomsMap = new Map(), floorOpeningsMap = new Map();
-floorMeta.forEach(f=>{ floorRoomsMap.set(f.level, []); floorOpeningsMap.set(f.level, []); });
+const floorDuctRunsMap = new Map(), floorTerminalsMap = new Map(), floorEquipmentMap = new Map();
+floorMeta.forEach(f=>{ floorRoomsMap.set(f.level, []); floorOpeningsMap.set(f.level, []);
+  floorDuctRunsMap.set(f.level, []); floorTerminalsMap.set(f.level, []); floorEquipmentMap.set(f.level, []); });
 _allRooms.forEach(r=>{ if(!floorRoomsMap.has(r.level)) floorRoomsMap.set(r.level, []); floorRoomsMap.get(r.level).push(r); });
 const _roomLevelById = new Map(_allRooms.map(r=>[r.id, r.level]));
 _allOpenings.forEach(o=>{ const lvl=_roomLevelById.get(o.rid); if(lvl==null) return;
   if(!floorOpeningsMap.has(lvl)) floorOpeningsMap.set(lvl, []); floorOpeningsMap.get(lvl).push(o); });
+_allDuctRuns.forEach(d=>{ if(!floorDuctRunsMap.has(d.level)) floorDuctRunsMap.set(d.level, []); floorDuctRunsMap.get(d.level).push(d); });
+_allDuctTerminals.forEach(t=>{ if(!floorTerminalsMap.has(t.level)) floorTerminalsMap.set(t.level, []); floorTerminalsMap.get(t.level).push(t); });
+_allDuctEquipment.forEach(e=>{ if(!floorEquipmentMap.has(e.level)) floorEquipmentMap.set(e.level, []); floorEquipmentMap.get(e.level).push(e); });
 
 let rooms = floorRoomsMap.get(floorMeta[currentFloorIdx].level) || [];
 let openings = floorOpeningsMap.get(floorMeta[currentFloorIdx].level) || [];
+let ductRuns = floorDuctRunsMap.get(floorMeta[currentFloorIdx].level) || [];
+let ductTerminals = floorTerminalsMap.get(floorMeta[currentFloorIdx].level) || [];
+let ductEquipment = floorEquipmentMap.get(floorMeta[currentFloorIdx].level) || [];
 let PPF = floorMeta[currentFloorIdx].pxPerFt;   // reassignable — "Match total ft²" recalibrates this after drawing
 
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
@@ -331,6 +459,15 @@ let view = {zoom:1, panX:0, panY:0}, selected=null, mode='select', draft=[], dra
 let ruler=null;   // {a:[x,y], b:[x,y]} in world (px) coords — last/active measurement, or null
 let lastSavedJSON=null;   // buildPayload() snapshot as of the last save — set once at load, below
 let tab='rooms', paintCat=null, activeType=null, hoverEdge=null, northDeg=(floorMeta[currentFloorIdx].north_deg||0);   // Construction paint state; northDeg = ° CW from screen-up to true north (active floor's)
+// Duct-drawing hover state: hoverDuctSnap = a nearby existing network point the next click
+// would snap onto (terminal/equipment placement or a duct-draft point); ductPreviewPt = the
+// next duct-draft point's would-be location (post point-snap/angle-snap), rubber-banded
+// from the last placed point so the angle constraint is visible before clicking.
+let hoverDuctSnap=null, ductPreviewPt=null;
+// 'engineer' shows the supply/return centerline markup (see drawDuctCenterline); 'client'
+// hides it — for a submittal-ready view, since those centerlines are engineer notation,
+// not part of the actual duct drawing. Persisted like the theme (a display preference).
+let ductViewMode = localStorage.getItem('loadcalc-ductview')==='client' ? 'client' : 'engineer';
 // Inline type add/edit form state — {cat, name} of the type being edited (name=null means
 // "adding a new one in this cat"), or null when no form is open. Replaces the old one-
 // field-at-a-time prompt() chain for wall/roof/floor/window/door types with a single form
@@ -363,6 +500,19 @@ let ZONE_LIB = (D.zones&&D.zones.length) ? D.zones.map(z=>typeof z==='object'?z.
 // Construction type libraries — seeded defaults (no-load first). Later replaced by
 // the DM-setup JSON (same {name,u,dark} the .vbs uses), passed in via D.wall_types/D.roof_types.
 const PALETTE = ['#ef4444','#f59e0b','#8b5cf6','#0ea5e9','#ec4899','#14b8a6','#84cc16','#f43f5e'];
+// Duct vocabulary is a fixed set, not a user-extensible library like wall/roof types —
+// there's no meaningful "add a new kind of terminal" the way there is "add a new wall
+// construction". kind key -> label.
+// Run kind is now just which air SYSTEM a run is on — its physical FORM (rect/round/flex)
+// is auto-classified from topology (see effectiveForm) or manually forced after a split,
+// not chosen upfront. See DUCT_FORM_OPTS below.
+const DUCT_RUN_KINDS = [['supply','Supply Duct'],['return','Return Duct']];
+const DUCT_FORM_OPTS = [['auto','Auto'],['rect','Rectangular'],['round','Round'],['flex','Flexible']];
+const TERMINAL_KINDS = [['ceiling_supply','Ceiling Supply Diffuser'],['ceiling_return','Ceiling Return'],
+  ['sidewall_supply','Sidewall Supply'],['sidewall_return','Sidewall Return']];
+const EQUIPMENT_KINDS = [['AH','Air Handler'],['CU','Condensing Unit'],['DH','Dehumidifier']];
+let selDuctKind=null, selDuctId=null;   // currently selected placed duct item (for its property form) — kind is 'run'|'terminal'|'equip'
+function ductLabel(kindList, key){ const f=kindList.find(k=>k[0]===key); return f?f[1]:key; }
 // Every project's wall/roof/floor palette must start with a "No X load" entry —
 // a real DM-setup JSON's wall_types/roof_types/floor_types is just the site's
 // actual construction(s), with no "none" placeholder of its own. Without this,
@@ -467,7 +617,8 @@ function backfillVentRates(){
   });
 }
 function edgeParam(r,i,wp){ const a=r.points[i], b=r.points[(i+1)%r.points.length]; const dx=b[0]-a[0],dy=b[1]-a[1]; const L2=dx*dx+dy*dy||1e-9; return Math.max(0,Math.min(1,((wp[0]-a[0])*dx+(wp[1]-a[1])*dy)/L2)); }
-function typeColor(cat,name){ const lib=libOf(cat); const i=lib.findIndex(t=>t.name===name); return i<=0?null:PALETTE[(i-1)%PALETTE.length]; }
+function typeColor(cat,name){ const lib=libOf(cat); const i=lib.findIndex(t=>t.name===name); if(i<=0) return null;
+  const t=lib[i]; return (t&&t.color) || PALETTE[(i-1)%PALETTE.length]; }
 function hexA(hex,a){ const n=parseInt(hex.slice(1),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
 
 function rel(e){ const r=cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
@@ -501,7 +652,265 @@ function fmtFtIn(ft){ const totalIn=Math.round(ft*12), f=Math.floor(totalIn/12),
 function pip(pt,poly){ let c=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1]; if(((yi>pt[1])!=(yj>pt[1])) && (pt[0]<(xj-xi)*(pt[1]-yi)/((yj-yi)||1e-9)+xi)) c=!c; } return c; }
 function cen(sp){ let x=0,y=0; sp.forEach(p=>{x+=p[0];y+=p[1];}); return [x/sp.length, y/sp.length]; }
 function segDist(p,a,b){ const dx=b[0]-a[0],dy=b[1]-a[1]; const L2=dx*dx+dy*dy||1e-9; let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t=Math.max(0,Math.min(1,t)); return Math.hypot(p[0]-(a[0]+t*dx), p[1]-(a[1]+t*dy)); }
+
+// ── Duct rendering — the whole point of this feature per the user: has to read as real
+// ductwork (double-line rigid trunk, coiled flex branch), not a schematic single line.
+// Sizes default to a placeholder until the Phase C sizing engine assigns real ones, so a
+// freshly-drawn run still looks like a duct instead of a bare line.
+const DUCT_DEFAULT_W_IN=12, DUCT_DEFAULT_H_IN=8, DUCT_DEFAULT_DIA_IN=8;
+function inToPx(inches){ return (inches/12) * PPF * view.zoom; }
+function ductSizeLabel(d){
+  const form=effectiveForm(d);
+  const dims = form==='rect' ? (d.width_in&&d.height_in ? (d.width_in+'X'+d.height_in) : '')
+                             : (d.diameter_in ? (d.diameter_in+'Ø') : '');
+  const cfm = d.cfm!=null ? d.cfm+' cfm' : '';
+  return [dims,cfm].filter(Boolean).join(' · ');
+}
+function drawDuctLabel(sp, label){
+  if(!label) return;
+  // Placed at the midpoint of the run's longest segment, centered ON the duct (not offset
+  // above it) — textBaseline='middle' plus no y-offset lands it right on the centerline. A
+  // white halo (stroked wide, behind the fill) keeps it legible over the duct lines it sits on.
+  let best=0, bestLen=-1;
+  for(let i=0;i<sp.length-1;i++){ const l=Math.hypot(sp[i+1][0]-sp[i][0],sp[i+1][1]-sp[i][1]); if(l>bestLen){bestLen=l;best=i;} }
+  const a=sp[best], b=sp[best+1], mx=(a[0]+b[0])/2, my=(a[1]+b[1])/2;
+  ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=3; ctx.strokeText(label, mx, my);
+  ctx.fillStyle='#111827'; ctx.fillText(label, mx, my);
+  ctx.textBaseline='alphabetic';
+}
+// One offset "rail" of a mitered double-line outline (like a real duct fitting's mitered
+// elbow): endpoints offset by their single adjacent segment's normal, interior vertices
+// offset along the two adjacent segments' averaged (miter) direction so the rail lands
+// exactly on the intersection of both segments' offset lines — no per-segment seam.
+// `side` is +1/-1 for the two rails. Miter length is capped (like canvas's miterLimit) so
+// a near-180° reversal doesn't spike out.
+function offsetPolyline(pts, halfW, side){
+  const n = pts.length, dirs=[];
+  for(let i=0;i<n-1;i++){ const dx=pts[i+1][0]-pts[i][0], dy=pts[i+1][1]-pts[i][1], len=Math.hypot(dx,dy)||1; dirs.push([dx/len,dy/len]); }
+  const out=[];
+  for(let i=0;i<n;i++){
+    let nx,ny;
+    if(i===0){ nx=-dirs[0][1]; ny=dirs[0][0]; }
+    else if(i===n-1){ nx=-dirs[n-2][1]; ny=dirs[n-2][0]; }
+    else {
+      const n1x=-dirs[i-1][1], n1y=dirs[i-1][0], n2x=-dirs[i][1], n2y=dirs[i][0];
+      let mx=n1x+n2x, my=n1y+n2y; const mlen=Math.hypot(mx,my);
+      if(mlen<1e-6){ nx=n2x; ny=n2y; }
+      else { mx/=mlen; my/=mlen; const cosHalf=mx*n1x+my*n1y, miterLen=1/Math.max(cosHalf,0.2); nx=mx*miterLen; ny=my*miterLen; }
+    }
+    out.push([pts[i][0]+nx*halfW*side, pts[i][1]+ny*halfW*side]);
+  }
+  return out;
+}
+// DM convention: the duct itself is black (selection highlights blue instead of the old
+// supply/return color coding); a thin colored centerline additionally marks supply (blue)
+// vs return (orange) runs — matches the reference DM drawings the user provided. These
+// centerlines are engineer markup, not part of the drawing — gated by `ductViewMode` so
+// they're hidden in the client/submittal view (see bDuctView toggle).
+const DUCT_SUPPLY_COL = '#1d4ed8', DUCT_RETURN_COL = '#f97316';
+function drawDuctCenterline(sp, system){
+  if(ductViewMode!=='engineer') return;
+  ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+  ctx.strokeStyle = system==='supply' ? DUCT_SUPPLY_COL : DUCT_RETURN_COL;
+  ctx.lineWidth=1; ctx.stroke();
+}
+// Rect and round trunks render identically (a mitered double-line outline) — in 2D plan
+// view they only differ in which size field applies (W×H vs diameter) and the label
+// format (see ductSizeLabel); only `flex` gets the corrugated look, in drawFlexRun below.
+function drawHardRun(d, on){
+  const form = effectiveForm(d);
+  const half = inToPx(form==='rect' ? (d.width_in || DUCT_DEFAULT_W_IN) : (d.diameter_in || DUCT_DEFAULT_DIA_IN))/2;
+  const sp = d.points.map(w2s);
+  ctx.strokeStyle = on ? '#2563eb' : '#111827'; ctx.lineWidth=1.4;
+  if(sp.length>=2){
+    const left=offsetPolyline(sp,half,1), right=offsetPolyline(sp,half,-1);
+    ctx.beginPath();
+    left.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+    for(let i=right.length-1;i>=0;i--) ctx.lineTo(right[i][0],right[i][1]);
+    ctx.closePath(); ctx.stroke();
+  }
+  drawDuctCenterline(sp, d.system);
+  drawDuctLabel(sp, ductSizeLabel(d));
+}
+// One "rail" of a corrugated flex-duct bellows: walks a single segment at a fixed
+// REAL-WORLD step (so the corrugation reads the same density at any zoom level),
+// necking the offset in by `bump` on every other step — both rails neck in on the same
+// steps, so the tube visibly pinches at each "ring" the way a real insulated flex duct does.
+// [smoothLo,smoothHi] (px along THIS segment, measured from point a) is a stretch that
+// renders plain/smooth instead of corrugated — the collar stub at a branch takeoff (see
+// drawFlexRun); both zero for an ordinary flex run (no effect — matches the old behavior).
+// [visLo,visHi] (px along THIS segment, from point a) is the range that's drawn at all —
+// points outside it are skipped entirely, not just left un-corrugated, so a branch's rail
+// never renders back over the trunk it tees from (see drawFlexRun's `hideLen`). Within the
+// visible range, [smoothLo,smoothHi] is the plain (non-corrugated) collar stub.
+function flexRail(a,b,halfW,bump,stepPx,side,visLo,visHi,smoothLo,smoothHi){
+  const dx=b[0]-a[0], dy=b[1]-a[1], len=Math.hypot(dx,dy)||1;
+  const ux=dx/len, uy=dy/len, nx=-uy, ny=ux;
+  const n=Math.max(2,Math.round(len/stepPx));
+  const pts=[];
+  for(let k=0;k<=n;k++){
+    const t=k/n, distAlong=t*len;
+    if(distAlong<visLo || distAlong>visHi) continue;
+    const px=a[0]+dx*t, py=a[1]+dy*t;
+    const smooth = distAlong>=smoothLo && distAlong<=smoothHi;
+    const w=halfW-(smooth?0:((k%2===0)?0:bump));
+    pts.push([px+nx*w*side, py+ny*w*side]);
+  }
+  return pts;
+}
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function drawFlexRun(d, on){
+  // Corrugated/bellows outline (per segment — a slight kink at bends reads as natural for
+  // a flexible duct, unlike the rigid trunk's true miter) instead of a thin line + ticks.
+  // If this run is a branch (findTeePoint), nothing is drawn for the stretch that falls
+  // INSIDE the trunk it tees from (`hideLen`, the trunk's own half-width/diameter there —
+  // real ductwork doesn't render past the wall it penetrates), then a plain round collar —
+  // a real spin-in fitting, same diameter, no taper — starts right at the trunk's outer
+  // wall before the corrugation begins. Both budgets are spent walking segments in order
+  // from whichever end ties into the trunk, so it's correct regardless of draw direction.
+  const half = inToPx(d.diameter_in || DUCT_DEFAULT_DIA_IN)/2;
+  const sp = d.points.map(w2s);
+  const bump = half*0.35, step = inToPx(2);
+  const tee = findTeePoint(d), collarLen = inToPx(8);
+  const hideLen = tee ? inToPx(effectiveForm(tee.onRun)==='rect' ? (tee.onRun.width_in||DUCT_DEFAULT_W_IN) : (tee.onRun.diameter_in||DUCT_DEFAULT_DIA_IN))/2 : 0;
+  const nSeg = sp.length-1;
+  const visLo=new Array(nSeg).fill(0), visHi=new Array(nSeg).fill(Infinity), smoothLo=new Array(nSeg).fill(0), smoothHi=new Array(nSeg).fill(0);
+  if(tee){
+    const hideEnd=hideLen, collarEnd=hideLen+collarLen;
+    let cursor=0;
+    const order=[]; for(let i=0;i<nSeg;i++) order.push(i);
+    if(tee.end==='end') order.reverse();
+    order.forEach(i=>{
+      const a=sp[i], b=sp[i+1], segLen=Math.hypot(b[0]-a[0],b[1]-a[1])||1;
+      const segHideEnd=clamp(hideEnd-cursor,0,segLen), segCollarEnd=clamp(collarEnd-cursor,0,segLen);
+      if(tee.end==='start'){ visLo[i]=segHideEnd; visHi[i]=segLen; smoothLo[i]=segHideEnd; smoothHi[i]=segCollarEnd; }
+      else { visLo[i]=0; visHi[i]=segLen-segHideEnd; smoothLo[i]=segLen-segCollarEnd; smoothHi[i]=segLen-segHideEnd; }
+      cursor+=segLen;
+    });
+  }
+  ctx.strokeStyle = on ? '#2563eb' : '#111827'; ctx.lineWidth=1.2;
+  for(let i=0;i<nSeg;i++){
+    const a=sp[i], b=sp[i+1];
+    const left=flexRail(a,b,half,bump,step,1,visLo[i],visHi[i],smoothLo[i],smoothHi[i]), right=flexRail(a,b,half,bump,step,-1,visLo[i],visHi[i],smoothLo[i],smoothHi[i]);
+    if(left.length<2) continue;
+    ctx.beginPath();
+    left.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+    for(let j=right.length-1;j>=0;j--) ctx.lineTo(right[j][0],right[j][1]);
+    ctx.closePath(); ctx.stroke();
+  }
+  drawDuctCenterline(sp, d.system);
+  drawDuctLabel(sp, ductSizeLabel(d));
+}
+function drawTerminalIcon(t, on){
+  // Square = ceiling supply, circle = ceiling return, arrow = sidewall supply/return —
+  // matches the reference sheets' HVAC Symbols legend exactly. Fixed screen-space size
+  // (not scaled by PPF) — real CAD terminal blocks are drawn at a constant symbol size
+  // regardless of plan scale, same as a north-arrow or door-swing symbol would be.
+  const s=w2s(t.point), sz=8;
+  const col = on ? '#111827' : (t.kind.indexOf('supply')>=0 ? '#1d4ed8' : '#15803d');
+  ctx.strokeStyle=col; ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=1.5;
+  if(t.kind==='ceiling_supply'){
+    ctx.fillRect(s[0]-sz,s[1]-sz,sz*2,sz*2); ctx.strokeRect(s[0]-sz,s[1]-sz,sz*2,sz*2);
+    ctx.beginPath(); ctx.moveTo(s[0]-sz,s[1]-sz); ctx.lineTo(s[0]+sz,s[1]+sz);
+    ctx.moveTo(s[0]+sz,s[1]-sz); ctx.lineTo(s[0]-sz,s[1]+sz); ctx.stroke();
+  } else if(t.kind==='ceiling_return'){
+    ctx.beginPath(); ctx.arc(s[0],s[1],sz,0,7); ctx.fill(); ctx.stroke();
+  } else {
+    // Sidewall supply/return: an arrow. Direction is a fixed visual cue in v1 — terminals
+    // are free points (not wall-attached like windows/doors), so there's no wall normal to
+    // derive an actual facing direction from.
+    const dir = t.kind==='sidewall_supply' ? 1 : -1;
+    ctx.beginPath(); ctx.moveTo(s[0]-sz*dir,s[1]); ctx.lineTo(s[0]+sz*dir,s[1]);
+    ctx.lineTo(s[0]+sz*0.4*dir,s[1]-sz*0.5); ctx.moveTo(s[0]+sz*dir,s[1]); ctx.lineTo(s[0]+sz*0.4*dir,s[1]+sz*0.5);
+    ctx.stroke();
+  }
+  const label=[t.size,t.cfm!=null?t.cfm+' cfm':''].filter(Boolean).join(' · ');
+  if(label){ ctx.fillStyle='#111827'; ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.fillText(label, s[0], s[1]+sz+11); }
+}
+function drawEquipmentIcon(eq, on){
+  // Square = air handler / dehumidifier, circle = condensing unit — matches the reference.
+  const s=w2s(eq.point), sz=13;
+  ctx.strokeStyle = on ? '#111827' : '#5b21b6'; ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=1.5;
+  if(eq.kind==='CU'){ ctx.beginPath(); ctx.arc(s[0],s[1],sz,0,7); ctx.fill(); ctx.stroke(); }
+  else { ctx.fillRect(s[0]-sz,s[1]-sz,sz*2,sz*2); ctx.strokeRect(s[0]-sz,s[1]-sz,sz*2,sz*2); }
+  ctx.fillStyle='#111827'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center'; ctx.fillText(eq.label||eq.kind, s[0], s[1]+sz+11);
+}
 function nearestEdge(wp){ let best=null; rooms.forEach(r=>{ const P=r.points; for(let i=0;i<P.length;i++){ const d=segDist(wp,P[i],P[(i+1)%P.length]); if(!best||d<best.dist) best={room:r,i:i,dist:d}; } }); return best; }
+// Nearest existing duct-network point — any run vertex, terminal, or equipment point, OR
+// any point ALONG a run's segments (via segDist, same closest-point-on-segment math as
+// nearestEdge) so a branch can tee off mid-span from a straight trunk, not just its
+// endpoints — a real duct takeoff, and the fix for "can't attach the flex duct to the main
+// trunk" (previously only exact vertices were snap targets). Caller applies its own pixel
+// tolerance, same convention as nearestEdge.
+function closestOnSeg(p,a,b){ const dx=b[0]-a[0], dy=b[1]-a[1], L2=dx*dx+dy*dy||1e-9; let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t=Math.max(0,Math.min(1,t)); const q=[a[0]+t*dx,a[1]+t*dy]; return {point:q, dist:Math.hypot(p[0]-q[0],p[1]-q[1])}; }
+function nearestDuctPoint(wp){
+  let best=null;
+  const consider=p=>{ const dist=Math.hypot(wp[0]-p[0],wp[1]-p[1]); if(!best||dist<best.dist) best={point:p,dist:dist}; };
+  ductRuns.forEach(d=>{
+    d.points.forEach(consider);
+    for(let i=0;i<d.points.length-1;i++) consider(closestOnSeg(wp,d.points[i],d.points[i+1]).point);
+  });
+  ductTerminals.forEach(t=>consider(t.point));
+  ductEquipment.forEach(eq=>consider(eq.point));
+  return best;
+}
+// Does either of this run's endpoints tee off the MIDDLE of some other run's segment — a
+// real branch takeoff — as opposed to just meeting another run at ITS endpoint (that's
+// trunk continuation, not a branch: two runs sharing an exact tip-to-tip point, e.g. the
+// two pieces of a split, stay rect). World-space tolerance (not zoom-scaled) since this
+// drives classification, not a UI hit-test — snapping (nearestDuctPoint) already places
+// genuinely-connected points at the exact same coordinate, so a small fixed epsilon is
+// plenty. Returns {end:'start'|'end', point, dir} (dir = unit vector from the tee point
+// INTO this run, for the collar stub) or null if this run isn't a branch.
+function findTeePoint(d){
+  const TOL=1.5;
+  function teeOn(pt){
+    let best=null;
+    ductRuns.forEach(r=>{
+      if(r.id===d.id) return;
+      for(let i=0;i<r.points.length-1;i++){
+        const a=r.points[i], b=r.points[i+1], cs=closestOnSeg(pt,a,b);
+        if(cs.dist>TOL) continue;
+        if(Math.hypot(cs.point[0]-a[0],cs.point[1]-a[1])<TOL || Math.hypot(cs.point[0]-b[0],cs.point[1]-b[1])<TOL) continue; // meets an endpoint, not a mid-span tee
+        if(!best||cs.dist<best.dist) best={point:cs.point, run:r};
+      }
+    });
+    return best;
+  }
+  if(!d.points || d.points.length<2) return null;
+  const s=teeOn(d.points[0]);
+  if(s){ const nxt=d.points[1], dx=nxt[0]-s.point[0], dy=nxt[1]-s.point[1], len=Math.hypot(dx,dy)||1; return {end:'start', point:s.point, dir:[dx/len,dy/len], onRun:s.run}; }
+  const e=teeOn(d.points[d.points.length-1]);
+  if(e){ const prv=d.points[d.points.length-2], dx=prv[0]-e.point[0], dy=prv[1]-e.point[1], len=Math.hypot(dx,dy)||1; return {end:'end', point:e.point, dir:[dx/len,dy/len], onRun:e.run}; }
+  return null;
+}
+// A run's physical form: an explicit override (set by the user after splitting) always
+// wins; otherwise 'auto' resolves from topology — trunk (rect) unless this run tees off
+// another run's mid-span, in which case it's a branch (flex, with a collar at the tee —
+// see drawFlexRun). 'round' never comes out of auto-resolution; it's reachable only as a
+// manual override on a split piece.
+function effectiveForm(d){
+  if(d.form && d.form!=='auto') return d.form;
+  return findTeePoint(d) ? 'flex' : 'rect';
+}
+// Constrains the direction from `prev` to `p` to the nearest 45° increment, preserving
+// distance — "clean angle" drawing (ducts run orthogonal/45°, not arbitrary freehand).
+function snapAngle(prev, p){
+  const dx=p[0]-prev[0], dy=p[1]-prev[1], dist=Math.hypot(dx,dy);
+  if(dist<1e-6) return p;
+  const ang=Math.round(Math.atan2(dy,dx)/(Math.PI/4))*(Math.PI/4);
+  return [prev[0]+Math.cos(ang)*dist, prev[1]+Math.sin(ang)*dist];
+}
+// Where the next duct-draft point would land if placed now: snap to an existing network
+// point within tolerance (an intentional connection always wins), else angle-snap relative
+// to the last draft point, else (first point of a run) the raw click.
+function ductNextPoint(wp){
+  const near=nearestDuctPoint(wp);
+  if(near && near.dist*view.zoom<12) return near.point;
+  if(draft.length) return snapAngle(draft[draft.length-1], wp);
+  return wp;
+}
 const CARD=['N','NE','E','SE','S','SW','W','NW'];
 function bearing(vx,vy){ let a=Math.atan2(vx,-vy)*180/Math.PI; return a<0?a+360:a; }  // screen vec (y down) -> ° CW from up
 function edgeOrient(r,i){ return edgeOrientFor(r,i,northDeg); }
@@ -550,6 +959,29 @@ function draw(){
     const sd=uvec(s2[0]-s1[0],s2[1]-s1[1]), sn=[-sd[1],sd[0]];
     [s1,s2].forEach(s=>{ ctx.beginPath(); ctx.moveTo(s[0]-sn[0]*4,s[1]-sn[1]*4); ctx.lineTo(s[0]+sn[0]*4,s[1]+sn[1]*4); ctx.strokeStyle=on?'#111827':col; ctx.lineWidth=2; ctx.stroke(); });
   });
+  // Ducts — Phase B rendering: true-to-scale double-line rigid trunk, coiled/corrugated
+  // flex branch, terminal/equipment symbols — matching the DM reference drawings'
+  // conventions (see drawHardRun/drawFlexRun/drawTerminalIcon/drawEquipmentIcon below).
+  ductRuns.forEach(d=>{
+    const on=(selDuctKind==='run'&&selDuctId===d.id);
+    if(effectiveForm(d)==='flex') drawFlexRun(d,on); else drawHardRun(d,on);
+  });
+  ductTerminals.forEach(t=>drawTerminalIcon(t, selDuctKind==='terminal'&&selDuctId===t.id));
+  ductEquipment.forEach(eq=>drawEquipmentIcon(eq, selDuctKind==='equip'&&selDuctId===eq.id));
+  // Vertex handles — every point of the selected run, same visual language AND same edit
+  // gestures as a room's corners: drag to move, alt-click (or right-click) to delete,
+  // click an edge-midpoint "+" to insert a new point there. Shift-click an INTERIOR vertex
+  // splits the run into two independently-editable pieces (a duct-specific extra — rooms
+  // have no equivalent) — see mousedown/contextmenu.
+  if(tab==='ducts' && selDuctKind==='run'){
+    const selRun=ductRuns.find(d=>d.id===selDuctId);
+    if(selRun){
+      for(let i=0;i<selRun.points.length-1;i++){ const a=selRun.points[i], b=selRun.points[i+1], m=w2s([(a[0]+b[0])/2,(a[1]+b[1])/2]);
+        ctx.beginPath(); ctx.arc(m[0],m[1],4,0,7); ctx.fillStyle='rgba(234,88,12,0.9)'; ctx.fill();
+        ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(m[0]-2.2,m[1]); ctx.lineTo(m[0]+2.2,m[1]); ctx.moveTo(m[0],m[1]-2.2); ctx.lineTo(m[0],m[1]+2.2); ctx.stroke(); }
+      selRun.points.forEach(p=>{ const s=w2s(p); ctx.beginPath(); ctx.arc(s[0],s[1],5,0,7); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#ea580c'; ctx.stroke(); });
+    }
+  }
   const sel=rooms.find(r=>r.id===selected);
   if(sel && tab==='rooms' && !paintCat){
     // edge-midpoint "add corner" handles (orange +)
@@ -560,6 +992,12 @@ function draw(){
     sel.points.forEach(p=>{ const s=w2s(p); ctx.beginPath(); ctx.arc(s[0],s[1],5,0,7); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#1d4ed8'; ctx.stroke(); });
   }
   if(mode==='draw' && draft.length){ const sp=draft.map(w2s); ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.strokeStyle='#ea580c'; ctx.lineWidth=2; ctx.stroke(); sp.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fillStyle='#ea580c';ctx.fill();}); }
+  if(mode==='draw_duct' && draft.length){ const sp=draft.map(w2s); ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.strokeStyle='#2563eb'; ctx.lineWidth=2; ctx.stroke(); sp.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fillStyle='#2563eb';ctx.fill();});
+    // Rubber-band preview of the next point (post point-snap/angle-snap), so the 45° constraint
+    // and any network-point snap are visible before the user actually clicks.
+    if(ductPreviewPt){ const last=sp[sp.length-1], pp=w2s(ductPreviewPt);
+      ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(pp[0],pp[1]); ctx.strokeStyle='#93c5fd'; ctx.lineWidth=1.5; ctx.stroke(); ctx.setLineDash([]); } }
+  if(hoverDuctSnap){ const hp=w2s(hoverDuctSnap); ctx.beginPath(); ctx.arc(hp[0],hp[1],7,0,7); ctx.strokeStyle='#f97316'; ctx.lineWidth=2; ctx.stroke(); }
   if(ruler){
     const distFt=Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1])/PPF;
     const s1=w2s(ruler.a), s2=w2s(ruler.b);
@@ -581,22 +1019,25 @@ function draw(){
 }
 
 const HINTS = {draw:'Drawing a room: click to drop each corner, double-click to finish, Esc to cancel.',
+  draw_duct:'Drawing a duct run: click to drop each point (snaps to nearby network points, otherwise to 45°), double-click to finish this run and start the next one, Enter/Esc to stop.',
   measure:'Measure: click and drag between two points to see the distance. Esc to clear.'};
-function setMode(m){ mode=m; cv.classList.toggle('draw',m==='draw'); cv.classList.toggle('measure',m==='measure');
+function setMode(m){ mode=m; cv.classList.toggle('draw',m==='draw'||m==='draw_duct'); cv.classList.toggle('measure',m==='measure');
   document.getElementById('bAdd').classList.toggle('on',m==='draw');
   document.getElementById('bMeasure').classList.toggle('on',m==='measure');
   const hint=document.getElementById('hint'); hint.textContent=HINTS[m]||''; hint.classList.toggle('show',!!HINTS[m]);
-  if(m!=='draw') draft=[]; }
+  if(m!=='draw'&&m!=='draw_duct') draft=[];
+  if(m!=='draw_duct'){ hoverDuctSnap=null; ductPreviewPt=null; } }
 
 function renderSide(){
   const s=document.getElementById('side');
   let h='<div class="tabs"><button class="tab'+(tab==='rooms'?' on':'')+'" data-tab="rooms">Rooms</button>'
        +'<button class="tab'+(tab==='con'?' on':'')+'" data-tab="con">Construction</button>'
+       +'<button class="tab'+(tab==='ducts'?' on':'')+'" data-tab="ducts">Ducts</button>'
        +'<button class="tab'+(tab==='proj'?' on':'')+'" data-tab="proj">Project / Weather</button></div>';
-  h += (tab==='rooms') ? roomsPanel() : (tab==='con') ? conPanel() : projectPanel();
+  h += (tab==='rooms') ? roomsPanel() : (tab==='con') ? conPanel() : (tab==='ducts') ? ductsPanel() : projectPanel();
   s.innerHTML=h;
-  s.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ tab=b.dataset.tab; paintCat=null; activeType=null; hoverEdge=null; cv.classList.remove('paint'); renderSide(); draw(); });
-  if(tab==='rooms') wireRooms(); else if(tab==='con') wireCon(); else wireProject();
+  s.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ tab=b.dataset.tab; paintCat=null; activeType=null; hoverEdge=null; cv.classList.remove('paint'); setMode('select'); renderSide(); draw(); });
+  if(tab==='rooms') wireRooms(); else if(tab==='con') wireCon(); else if(tab==='ducts') wireDucts(); else wireProject();
 }
 
 // Same {key,label} generic-field pattern as LOAD_FIELDS — every one of these is a
@@ -611,11 +1052,18 @@ const PROJECT_FIELDS=[['project_name','Project Name'],['weather_station','Weathe
   ['heating_design_percentile','Heating Percentile (e.g. 99%)'],
   ['dehumid_humidity_ratio','Dehum. Humidity Ratio (grains/lb)'],
   ['clear_sky_taub','Clear-sky τb'],['clear_sky_taud','Clear-sky τd']];
+const SF_FIELDS=[['clg_room','Cooling — Room %'],['clg_vent','Cooling — Ventilation %'],
+  ['htg_room','Heating — Room %'],['htg_vent','Heating — Ventilation %']];
 function projectPanel(){
   let h='<div class="selblock"><h3>Project / Weather</h3>';
-  h+='<div style="font-size:12px;color:#6b7280;margin-bottom:8px">Design conditions for this project\'s actual location — sourced from ASHRAE Fundamentals Ch.14 (or an equivalent regional table); there\'s no live weather lookup here. Manual values entered here take priority over any bundled station match and over the engine\'s Florida-representative defaults.</div>';
+  h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Design conditions for this project\'s actual location — sourced from ASHRAE Fundamentals Ch.14 (or an equivalent regional table); there\'s no live weather lookup here. Manual values entered here take priority over any bundled station match and over the engine\'s Florida-representative defaults.</div>';
   h+='<div class="loadgrid">';
   PROJECT_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input class="pf" data-k="'+f[0]+'" value="'+(PS[f[0]]!=null?String(PS[f[0]]).replace(/"/g,'&quot;'):'')+'">'; });
+  h+='</div>';
+  h+='<h3 style="margin-top:18px">Safety Factors</h3>';
+  h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Design margin on top of the calculated loads, project-wide. Room = envelope + internal gains; Vent = ventilation/infiltration/exhaust-makeup outdoor air — tracked separately since DM\'s own report does. Defaults (5/0/10/0%) are pre-filled with a rationale footnoted on the results report; edit here to override for this project.</div>';
+  h+='<div class="loadgrid">';
+  SF_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input type="number" step="1" class="sf" data-k="'+f[0]+'" value="'+SF[f[0]]+'">'; });
   h+='</div></div>';
   return h;
 }
@@ -624,6 +1072,145 @@ function wireProject(){
     const v=el.value.trim();
     if(v==='') delete PS[el.dataset.k]; else PS[el.dataset.k]=v;
   });
+  document.querySelectorAll('#side .sf').forEach(el=>el.oninput=()=>{ SF[el.dataset.k]=parseFloat(el.value)||0; });
+}
+
+// ── Ducts tab — Phase A: data model + manual drawing only, no rendering polish yet
+// (plain lines/dots in draw() for now; the double-line/coiled-flex rendering matching
+// the DM reference is Phase B, deliberately checked in as its own step).
+function ductsPanel(){
+  const kind=selDuctKind, id=selDuctId;
+  let item=null;
+  if(kind==='run') item=ductRuns.find(d=>d.id===id);
+  else if(kind==='terminal') item=ductTerminals.find(t=>t.id===id);
+  else if(kind==='equip') item=ductEquipment.find(e=>e.id===id);
+
+  const zoneField=(v)=>'<label>Zone</label><select class="df" data-f="zone"><option value=""'+(!v?' selected':'')+'>— none —</option>'
+    +ZONE_LIB.map(z=>'<option'+(z===v?' selected':'')+'>'+z+'</option>').join('')+'</select>';
+
+  let h='<div class="selblock"><h3>Ducts</h3>';
+  if(item){
+    if(kind==='run'){
+      const ef=effectiveForm(item), isRect=(ef==='rect');
+      h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(DUCT_RUN_KINDS,item.system)+' — '+ductLabel(DUCT_FORM_OPTS,ef)+(item.form==='auto'?' (auto)':' (forced)')
+        +'<br><span style="font-size:11px">Edit it like a room: drag a dot to move it, alt/right-click to delete it (min 2 points), click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it into two independently-editable pieces.</span></div><div class="loadgrid">';
+      h+='<label>Form</label><select class="df" data-f="form">'+DUCT_FORM_OPTS.map(([k,l])=>'<option value="'+k+'"'+(item.form===k?' selected':'')+'>'+l+'</option>').join('')+'</select>';
+      h+='<label>CFM</label><input type="number" step="any" class="df" data-f="cfm" value="'+(item.cfm!=null?item.cfm:'')+'">';
+      if(isRect){
+        h+='<label>Width (in)</label><input type="number" step="any" class="df" data-f="width_in" value="'+(item.width_in!=null?item.width_in:'')+'">';
+        h+='<label>Height (in)</label><input type="number" step="any" class="df" data-f="height_in" value="'+(item.height_in!=null?item.height_in:'')+'">';
+      } else {
+        h+='<label>Diameter (in)</label><input type="number" step="any" class="df" data-f="diameter_in" value="'+(item.diameter_in!=null?item.diameter_in:'')+'">';
+      }
+      h+=zoneField(item.zone)+'</div>';
+    } else if(kind==='terminal'){
+      h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(TERMINAL_KINDS,item.kind)+'</div><div class="loadgrid">';
+      h+='<label>CFM</label><input type="number" step="any" class="df" data-f="cfm" value="'+(item.cfm!=null?item.cfm:'')+'">';
+      h+='<label>Size</label><input class="df" data-f="size" value="'+(item.size!=null?String(item.size).replace(/"/g,'&quot;'):'')+'">';
+      h+=zoneField(item.zone)+'</div>';
+    } else {
+      h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(EQUIPMENT_KINDS,item.kind)+'</div><div class="loadgrid">';
+      h+='<label>Label</label><input class="df" data-f="label" value="'+(item.label!=null?String(item.label).replace(/"/g,'&quot;'):'')+'">';
+      h+=zoneField(item.zone)+'</div>';
+    }
+    h+='<button class="danger" id="ductDel">Delete this item</button>';
+  } else {
+    h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Pick Supply or Return below, then just draw — rect/round/flex is figured out automatically (trunk stays rect; anything that tees off an existing run becomes flex with a round collar at the takeoff). Select a run and edit it just like a room: drag a dot to move it, alt/right-click to delete it, click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it and force either piece to Rect/Round/Flex yourself. Terminals/equipment: one click places it.<br><b>Keyboard:</b> 1-2 draw a run (Supply/Return) · Shift+1-4 place a terminal (Ceil.Sup/Ret, Sidewall Sup/Ret) · Alt+1-3 place equipment (AH/CU/DH) · press again to deselect.</div>';
+    h+='<h3 style="margin-top:4px">Duct Runs</h3><div class="types">';
+    DUCT_RUN_KINDS.forEach(([key,label])=>{ const on=(paintCat==='ductrun'&&activeType===key);
+      h+='<div class="chip'+(on?' on':'')+'" data-dcat="ductrun" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
+    h+='</div>';
+    if(paintCat==='ductrun') h+='<button class="con-add" id="bDrawDuct">'+(mode==='draw_duct'?'Drawing… double-click to finish':'✏️ Draw Run')+'</button>';
+    h+='<h3 style="margin-top:14px">Terminals</h3><div class="types">';
+    TERMINAL_KINDS.forEach(([key,label])=>{ const on=(paintCat==='terminal'&&activeType===key);
+      h+='<div class="chip'+(on?' on':'')+'" data-dcat="terminal" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
+    h+='</div>';
+    h+='<h3 style="margin-top:14px">Equipment</h3><div class="types">';
+    EQUIPMENT_KINDS.forEach(([key,label])=>{ const on=(paintCat==='equip'&&activeType===key);
+      h+='<div class="chip'+(on?' on':'')+'" data-dcat="equip" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
+    h+='</div>';
+  }
+  h+='</div>';
+  const total=ductRuns.length+ductTerminals.length+ductEquipment.length;
+  h+='<div class="listblock"><h3>Placed ('+total+')</h3><div id="ductList">';
+  ductRuns.forEach(d=>{ h+='<div class="row'+(kind==='run'&&id===d.id?' sel':'')+'" data-dcat="run" data-did="'+d.id+'"><span>'+ductLabel(DUCT_RUN_KINDS,d.system)+' · '+ductLabel(DUCT_FORM_OPTS,effectiveForm(d))+'</span><span>'+(d.cfm!=null?d.cfm+' cfm':'—')+'</span></div>'; });
+  ductTerminals.forEach(t=>{ h+='<div class="row'+(kind==='terminal'&&id===t.id?' sel':'')+'" data-dcat="terminal" data-did="'+t.id+'"><span>'+ductLabel(TERMINAL_KINDS,t.kind)+'</span><span>'+(t.cfm!=null?t.cfm+' cfm':'—')+'</span></div>'; });
+  ductEquipment.forEach(e=>{ h+='<div class="row'+(kind==='equip'&&id===e.id?' sel':'')+'" data-dcat="equip" data-did="'+e.id+'"><span>'+(e.label||ductLabel(EQUIPMENT_KINDS,e.kind))+'</span><span></span></div>'; });
+  h+='</div></div>';
+  return h;
+}
+// Keyboard-driven duct tool selection — a second, faster control surface alongside the
+// side-panel chips (requested: the mouse-driven chip+button flow felt clunky). Unmodified
+// digits 1-4 arm a run kind (and go straight into draw_duct — no separate "Draw Run"
+// click), Shift+1-4 arm a terminal kind, Alt+1-3 arm an equipment kind; either way the tool
+// is immediately ready to place. Pressing the same key again toggles it off, mirroring the
+// existing chip-click behavior in wireDucts() below.
+function armDuctKeyTool(cat, key){
+  if(paintCat===cat && activeType===key){ paintCat=null; activeType=null; setMode('select'); }
+  else {
+    paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; tab='ducts';
+    if(cat==='ductrun') setMode('draw_duct'); else if(mode==='draw_duct') setMode('select');
+  }
+  cv.classList.toggle('paint', paintCat==='terminal'||paintCat==='equip');
+  renderSide(); draw();
+}
+function wireDucts(){
+  document.querySelectorAll('#side [data-dcat][data-dkey]').forEach(el=>el.onclick=()=>{
+    const cat=el.dataset.dcat, key=el.dataset.dkey;
+    if(paintCat===cat && activeType===key){ paintCat=null; activeType=null; setMode('select'); }
+    else { paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; if(mode==='draw_duct') setMode('select'); }
+    cv.classList.toggle('paint', paintCat==='terminal'||paintCat==='equip');
+    renderSide(); draw();
+  });
+  const drawBtn=document.getElementById('bDrawDuct');
+  if(drawBtn) drawBtn.onclick=()=>{ setMode(mode==='draw_duct'?'select':'draw_duct'); renderSide(); };
+  document.querySelectorAll('#ductList .row').forEach(el=>el.onclick=()=>{
+    selDuctKind=el.dataset.dcat; selDuctId=+el.dataset.did; paintCat=null; activeType=null; cv.classList.remove('paint'); renderSide(); draw();
+  });
+  document.querySelectorAll('#side .df').forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'onchange' : 'oninput';
+    el[ev]=()=>{
+      let item=null;
+      if(selDuctKind==='run') item=ductRuns.find(d=>d.id===selDuctId);
+      else if(selDuctKind==='terminal') item=ductTerminals.find(t=>t.id===selDuctId);
+      else if(selDuctKind==='equip') item=ductEquipment.find(e=>e.id===selDuctId);
+      if(!item) return;
+      const f=el.dataset.f, v=el.value;
+      item[f] = (el.tagName==='SELECT'||f==='label'||f==='size') ? v : (v===''?null:parseFloat(v));
+      if(f==='form') renderSide(); // Rect vs Round/Flex shows a different size field — re-render, not just re-draw
+      draw();
+    };
+  });
+  const delBtn=document.getElementById('ductDel');
+  if(delBtn) delBtn.onclick=()=>{
+    if(selDuctKind==='run') ductRuns=ductRuns.filter(d=>d.id!==selDuctId);
+    else if(selDuctKind==='terminal') ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId);
+    else if(selDuctKind==='equip') ductEquipment=ductEquipment.filter(e=>e.id!==selDuctId);
+    selDuctKind=null; selDuctId=null; renderSide(); draw();
+  };
+}
+function finishDuctDraw(){
+  if(draft.length>=2){
+    const d={id:nextDuctRunId++, system:activeType, form:'auto', points:draft.slice(), cfm:null,
+      width_in:null, height_in:null, diameter_in:null, zone:null};
+    ductRuns.push(d); selDuctKind='run'; selDuctId=d.id;
+  }
+  // Stay armed in draw_duct mode ("pick the pen up, keep drawing") instead of dropping back
+  // to select — lets a whole branching system (trunk + branches) be drawn in one continuous
+  // session. Enter (or Esc) ends the session; re-clicking Draw Run/a duct-kind chip also does.
+  draft=[]; ductPreviewPt=null; renderSide(); draw();
+}
+// Breaks a run into two independent pieces at interior point `i`, sharing that exact point
+// (stays visually continuous — and since they meet endpoint-to-endpoint, findTeePoint
+// correctly keeps treating that shared point as a continuation, not a new branch tee).
+// Both pieces start as a copy of the parent (same system/form/cfm/size) — the point is to
+// let the user then force either piece's Form independently, not to change anything yet.
+function splitDuctRun(run, i){
+  const twin = Object.assign({}, run, {id: nextDuctRunId++, points: run.points.slice(i)});
+  run.points = run.points.slice(0, i+1);
+  ductRuns.push(twin);
+  selDuctKind='run'; selDuctId=run.id;
+  renderSide(); draw();
 }
 
 const LOAD_FIELDS=[['lpd','Lighting (W/ft²)'],['epd','Equipment (W/ft²)'],['equip_latent','Equipment Latent (Btu/h) — cooking/dishwashing etc.'],['occ','Occupants'],
@@ -648,13 +1235,13 @@ function roomsPanel(){
       h+='<label>Overhang height above window (ft)</label><input type="number" step="0.1" min="0" id="oOhSep" value="'+(op.overhang_sep||0)+'">';
       h+='<label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer"><input type="checkbox" id="oShaded" style="width:auto"'+(op.shaded?' checked':'')+'> Interior shade (blinds)</label>';
       if(op.shaded){
-        h+='<div style="font-size:11.5px;color:#6b7280;margin:2px 0 6px">Indoor Attenuation Coefficient — how much of the solar gain the shade blocks (1.0 = none, lower = more shading)</div>';
+        h+='<div style="font-size:11.5px;color:var(--ink-muted);margin:2px 0 6px">Indoor Attenuation Coefficient — how much of the solar gain the shade blocks (1.0 = none, lower = more shading)</div>';
         h+='<label>IAC at 0° (beam, normal)</label><input type="number" step="0.01" min="0" max="1" id="oIac0" value="'+(op.iac0!=null?op.iac0:0.7)+'">';
         h+='<label>IAC at 60° (beam, grazing)</label><input type="number" step="0.01" min="0" max="1" id="oIac60" value="'+(op.iac60!=null?op.iac60:0.6)+'">';
         h+='<label>IAC diffuse</label><input type="number" step="0.01" min="0" max="1" id="oIacDiff" value="'+(op.iac_diffuse!=null?op.iac_diffuse:0.7)+'">';
       }
     }
-    h+='<div style="font-size:12px;color:#6b7280">Drag it along the wall to reposition · Delete key to remove</div>';
+    h+='<div style="font-size:12px;color:var(--ink-muted)">Drag it along the wall to reposition · Delete key to remove</div>';
     h+='<button class="danger" id="oDel">Delete this '+op.cat+'</button></div>';
   } else if(sel){
     h+='<div class="selblock"><h3>Selected room</h3>';
@@ -665,9 +1252,9 @@ function roomsPanel(){
     h+='<label>Floor</label><select id="fFloor">'+FLOOR_TYPES.map(t=>'<option'+(t.name===sel.floor?' selected':'')+'>'+t.name+'</option>').join('')+'</select>';
     h+='<label>Ceiling height (ft)</label><input type="number" step="0.1" id="fCeil" placeholder="e.g. 9" value="'+(sel.ceiling_ft!==''&&sel.ceiling_ft!=null?sel.ceiling_ft:'')+'">';
     h+='<label>Floor-to-floor height (ft)</label><input type="number" step="0.1" id="fFtoF" placeholder="defaults to ceiling ht." value="'+(sel.floor_to_floor_ft!==''&&sel.floor_to_floor_ft!=null?sel.floor_to_floor_ft:'')+'">';
-    h+='<div style="font-size:11px;color:#6b7280;margin-top:-6px">Exterior walls run to the structure above, not just the dropped ceiling — set this if there\'s a plenum (floor-to-floor taller than the ceiling height).</div>';
+    h+='<div style="font-size:11px;color:var(--ink-muted);margin-top:-6px">Exterior walls run to the structure above, not just the dropped ceiling — set this if there\'s a plenum (floor-to-floor taller than the ceiling height).</div>';
     h+='<label>Floor covering</label><select id="fCarpet"><option value="1"'+(sel.carpet!==false?' selected':'')+'>Carpet</option><option value="0"'+(sel.carpet===false?' selected':'')+'>No carpet (tile / vinyl / concrete)</option></select>';
-    h+='<div style="font-size:11px;color:#6b7280;margin-top:-6px">Feeds the RTS zone (ASHRAE Ch.18 Table 19/20) — changes how quickly a heat gain shows up as cooling load, not its size.</div>';
+    h+='<div style="font-size:11px;color:var(--ink-muted);margin-top:-6px">Feeds the RTS zone (ASHRAE Ch.18 Table 19/20) — changes how quickly a heat gain shows up as cooling load, not its size.</div>';
     h+='<div class="area">'+area(sel.points).toFixed(0)+' ft²</div>';
     const L=sel.loads||{}; h+='<div class="loadgrid">';
     LOAD_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input type="number" step="any" class="lf" data-k="'+f[0]+'" value="'+(L[f[0]]!=null?L[f[0]]:'')+'">'; });
@@ -675,12 +1262,14 @@ function roomsPanel(){
     h+='<div class="walls-list"><div class="wl-h">Walls — dir · type · length</div>';
     sel.points.forEach((p,i)=>{ const q=sel.points[(i+1)%sel.points.length]; const len=(Math.hypot(q[0]-p[0],q[1]-p[1])/PPF).toFixed(1); h+='<div class="wl-row"><span>'+edgeOrient(sel,i)+'</span><span>'+sel.walls[i]+'</span><span>'+len+' ft</span></div>'; });
     h+='</div>';
-    h+='<div style="font-size:12px;color:#6b7280">Loads seed from the room type — edit to override. Set North (top bar) so wall directions are right. Corners: drag=move · ✚=add · right/Alt-click=delete.</div>';
+    h+='<div style="font-size:12px;color:var(--ink-muted)">Loads seed from the room type — edit to override. Set North (top bar) so wall directions are right. Corners: drag=move · ✚=add · right/Alt-click=delete.</div>';
     h+='<button class="danger" id="fDel">Delete this room</button></div>';
   } else {
-    h+='<div class="selblock"><h3>No selection</h3><div style="font-size:13px;color:#6b7280">Click a room to edit it, a window/door to adjust it, or <b>+ Add Room</b>. Assign walls, roofs, windows &amp; doors in the <b>Construction</b> tab.</div></div>';
+    h+='<div class="selblock"><h3>No selection</h3><div style="font-size:13px;color:var(--ink-muted)">Click a room to edit it, a window/door to adjust it, or <b>+ Add Room</b>. Assign walls, roofs, windows &amp; doors in the <b>Construction</b> tab.</div></div>';
   }
-  h+='<div class="listblock"><h3>All rooms ('+rooms.length+')</h3><div id="list">';
+  h+='<div class="listblock"><h3>All rooms ('+rooms.length+')</h3>';
+  h+='<input class="filter-box" id="roomFilter" placeholder="Filter rooms…">';
+  h+='<div id="list">';
   rooms.forEach(r=>{ h+='<div class="row'+(r.id===selected?' sel':'')+'" data-id="'+r.id+'"><span>'+r.label+'</span><span>'+area(r.points).toFixed(0)+' ft²</span></div>'; });
   h+='</div></div>';
   return h;
@@ -731,10 +1320,20 @@ function wireRooms(){
     document.getElementById('fDel').onclick=delSel;
   }
   document.querySelectorAll('#list .row').forEach(el=>el.onclick=()=>{ selected=+el.dataset.id; selOpening=null; renderSide(); draw(); });
+  // Direct DOM show/hide on input, not a renderSide() re-render — re-rendering the panel
+  // on every keystroke would recreate this same input and steal its own focus, making it
+  // impossible to type more than one character.
+  const rf=document.getElementById('roomFilter');
+  if(rf) rf.oninput=()=>{
+    const q=rf.value.trim().toLowerCase();
+    document.querySelectorAll('#list .row').forEach(el=>{
+      el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
 }
 
 function conPanel(){
-  let h='<div class="selblock"><h3>Types &amp; assignment</h3><div style="font-size:12px;color:#6b7280">Pick a type, then click on the plan: <b>walls</b> (edges) for a wall type, <b>rooms</b> for a roof / floor / room / zone type, or a <b>wall</b> to drop a window / door. ＋ adds a type; 📋 duplicates one (a quick start for a similar variant); ✎ edits every field on it at once; ✕ deletes one. Esc stops.</div></div>';
+  let h='<div class="selblock"><h3>Types &amp; assignment</h3><div style="font-size:12px;color:var(--ink-muted)">Pick a type, then click on the plan: <b>walls</b> (edges) for a wall type, <b>rooms</b> for a roof / floor / room / zone type, or a <b>wall</b> to drop a window / door. ＋ adds a type; 📋 duplicates one (a quick start for a similar variant); ✎ edits every field on it at once; ✕ deletes one. Esc stops.</div></div>';
   h+='<div class="listblock">'+typeSection('wall','Wall types')+typeSection('window','Window types')+typeSection('door','Door types')+typeSection('roof','Roof types')+typeSection('floor','Floor types')+typeSection('rtype','Room types')+typeSection('zone','Zones (for per-system block loads)')+'</div>';
   return h;
 }
@@ -742,22 +1341,31 @@ function conPanel(){
 // and editable at once, replacing the old one-field-at-a-time prompt() chain. rtype/zone
 // keep the simple name-only prompt below (nothing else on them to edit here).
 const TYPE_FIELD_SPECS = {
-  wall:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox']],
-  roof:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox']],
-  floor: [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark','checkbox']],
-  window:[['name','Name','text'],['u','U-value','number'],['shgc','SHGC (0–1)','number'],['width','Width (ft)','number'],['height','Height (ft)','number']],
-  door:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['width','Width (ft)','number'],['height','Height (ft)','number']],
+  wall:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox'],['color','Custom plan color','color']],
+  roof:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox'],['color','Custom plan color','color']],
+  floor: [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark','checkbox'],['color','Custom plan color','color']],
+  window:[['name','Name','text'],['u','U-value','number'],['shgc','SHGC (0–1)','number'],['width','Width (ft)','number'],['height','Height (ft)','number'],['color','Custom plan color','color']],
+  door:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['width','Width (ft)','number'],['height','Height (ft)','number'],['color','Custom plan color','color']],
 };
 const TYPE_FIELD_DEFAULTS = {
   wall:{u:0,dark:false}, roof:{u:0,dark:false}, floor:{u:0,dark:false},
   window:{u:0.5,shgc:0.4,width:3,height:4}, door:{u:0,width:3,height:6.83,dark:false},
 };
-function typeFieldForm(cat, cur){
+function typeFieldForm(cat, cur, autoColor){
   const specs=TYPE_FIELD_SPECS[cat], defaults=TYPE_FIELD_DEFAULTS[cat]||{};
   let h='<div class="loadgrid">';
   specs.forEach(([key,label,kind])=>{
     const val = cur ? cur[key] : defaults[key];
     if(kind==='checkbox') h+='<label>'+label+'</label><input type="checkbox" class="tf" data-k="'+key+'"'+(val?' checked':'')+'>';
+    else if(kind==='color'){
+      // Unchecked = no override, falls back to the auto-assigned palette color (pre-filled
+      // into the picker so it starts on the color actually showing, not an arbitrary one).
+      const has = val!=null && val!=='';
+      h+='<label>'+label+'</label><div style="display:flex;align-items:center;gap:6px">'
+        +'<input type="checkbox" class="tf-color-on" data-k="'+key+'"'+(has?' checked':'')+' style="width:auto">'
+        +'<input type="color" class="tf" data-k="'+key+'" value="'+(has?val:autoColor)+'"'+(has?'':' disabled')+'>'
+        +'</div>';
+    }
     else h+='<label>'+label+'</label><input class="tf" data-k="'+key+'" type="'+(kind==='number'?'number':'text')+'"'
            +(kind==='number'?' step="any"':'')+' value="'+String(val!=null?val:'').replace(/"/g,'&quot;')+'">';
   });
@@ -768,18 +1376,32 @@ function typeFieldForm(cat, cur){
 function readTypeForm(cat){
   const out={};
   TYPE_FIELD_SPECS[cat].forEach(([key,label,kind])=>{
+    if(kind==='color'){
+      const on=document.querySelector('#side .tf-color-on[data-k="'+key+'"]').checked;
+      out[key] = on ? document.querySelector('#side .tf[data-k="'+key+'"]').value : null;
+      return;
+    }
     const el=document.querySelector('#side .tf[data-k="'+key+'"]');
     out[key] = kind==='checkbox' ? el.checked : kind==='number' ? (parseFloat(el.value)||0) : el.value.trim();
   });
   return out;
 }
 function typeSection(cat,title){
-  const lib=libOf(cat); let h='<h3>'+title+'</h3><div class="types">';
+  const lib=libOf(cat); let h='<h3>'+title+'</h3>';
+  if(lib.length>4) h+='<input class="filter-box type-filter" data-cat="'+cat+'" placeholder="Filter '+title.toLowerCase()+'…">';
+  h+='<div class="types" data-cat="'+cat+'">';
   lib.forEach((t,i)=>{ const name=(typeof t==='string')?t:t.name; const isNo=((cat==='wall'||cat==='roof'||cat==='floor')&&i===0);
+    // Auto-assigned color for this slot, BEFORE any custom override — this is what the color
+    // picker in the edit form pre-fills with, so it starts on the color already showing rather
+    // than an arbitrary default.
+    const autoCol = cat==='window'?'#0284c7' : cat==='door'?'#a16207' : cat==='zone'?'#7c3aed' : cat==='rtype'?'#94a3b8' : (i===0?'#cbd5e1':PALETTE[(i-1)%PALETTE.length]);
     if(editingType && editingType.cat===cat && editingType.name===name){
-      h+='<div class="type-form">'+typeFieldForm(cat, t)+'</div>'; return;
+      h+='<div class="type-form">'+typeFieldForm(cat, t, autoCol)+'</div>'; return;
     }
-    const col = cat==='window'?'#0284c7' : cat==='door'?'#a16207' : cat==='zone'?'#7c3aed' : cat==='rtype'?'#94a3b8' : (i===0?'#cbd5e1':PALETTE[(i-1)%PALETTE.length]);
+    // A custom color (set via the type's edit form) always wins over the category default/
+    // auto-assigned palette slot — this is what the engineer sees on the plan too, via typeColor().
+    const custom = (typeof t==='object' && t.color) ? t.color : null;
+    const col = custom || autoCol;
     let info=''; if(typeof t==='object'){ if(t.u) info='U '+t.u; if(cat==='window'&&t.shgc!=null) info+=(info?' · ':'')+'SHGC '+t.shgc;
       if((cat==='window'||cat==='door')&&t.width&&t.height) info+=(info?' · ':'')+t.width+'×'+t.height+'ft'; }
     const on=(paintCat===cat&&activeType===name);
@@ -789,7 +1411,7 @@ function typeSection(cat,title){
              +'<span class="edit" data-cat="'+cat+'" data-edit="'+name.replace(/"/g,'&quot;')+'">✎</span>'
              +'<span class="del" data-cat="'+cat+'" data-del="'+name.replace(/"/g,'&quot;')+'">✕</span>')+'</div>'; });
   h+='</div>';
-  if(editingType && editingType.cat===cat && editingType.name===null) h+='<div class="type-form">'+typeFieldForm(cat, null)+'</div>';
+  if(editingType && editingType.cat===cat && editingType.name===null) h+='<div class="type-form">'+typeFieldForm(cat, null, '#888888')+'</div>';
   else h+='<button class="con-add" data-cat="'+cat+'">＋ Add type</button>';
   return h;
 }
@@ -833,10 +1455,10 @@ function startAddType(cat){
 function cancelTypeEdit(){ editingType=null; renderSide(); }
 function applyTypeSave(cat, oldName){   // oldName === '' means "adding new"
   const f = readTypeForm(cat);
-  if(!f.name){ alert('Name is required.'); return; }
+  if(!f.name){ showToast('Name is required.', true); return; }
   if(!oldName){
     const lib=libOf(cat);
-    if(lib.some(t=>t.name===f.name)){ alert('A '+cat+' type named "'+f.name+'" already exists.'); return; }
+    if(lib.some(t=>t.name===f.name)){ showToast('A '+cat+' type named "'+f.name+'" already exists.', true); return; }
     lib.push(f);
   } else {
     const cur=libOf(cat).find(t=>t.name===oldName);
@@ -886,6 +1508,18 @@ function wireCon(){
   document.querySelectorAll('#side .con-add').forEach(el=>el.onclick=()=>{ startAddType(el.dataset.cat); });
   document.querySelectorAll('#side .tf-save').forEach(el=>el.onclick=(ev)=>{ ev.stopPropagation(); applyTypeSave(el.dataset.cat, el.dataset.oldname); });
   document.querySelectorAll('#side .tf-cancel').forEach(el=>el.onclick=(ev)=>{ ev.stopPropagation(); cancelTypeEdit(); });
+  document.querySelectorAll('#side .tf-color-on').forEach(el=>el.onchange=()=>{
+    const sw=document.querySelector('#side .tf[data-k="'+el.dataset.k+'"]'); if(sw) sw.disabled=!el.checked;
+  });
+  // Same direct-DOM show/hide as the room filter — avoids a renderSide() re-render
+  // stealing focus from the input on every keystroke.
+  document.querySelectorAll('#side .type-filter').forEach(el=>el.oninput=()=>{
+    const q=el.value.trim().toLowerCase();
+    const box=document.querySelector('#side .types[data-cat="'+el.dataset.cat+'"]');
+    if(box) box.querySelectorAll('.chip').forEach(chip=>{
+      chip.style.display = chip.querySelector('.nm').textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
 }
 function delType(cat,name){
   if(cat==='wall'){ WALL_TYPES=WALL_TYPES.filter(t=>t.name!==name); rooms.forEach(r=>{ r.walls=r.walls.map(w=>w===name?'No wall load':w); }); }
@@ -906,7 +1540,7 @@ cv.addEventListener('wheel', e=>{ e.preventDefault(); const f=e.deltaY<0?1.1:1/1
 
 cv.addEventListener('mousedown', e=>{
   const [mx,my]=rel(e), wp=s2w(mx,my);
-  if(mode==='draw') return;
+  if(mode==='draw'||mode==='draw_duct') return;
   if(mode==='measure'){ ruler={a:wp,b:wp}; drag={type:'measure'}; draw(); return; }
   if(paintCat){
     if(paintCat==='wall'){ const ne=nearestEdge(wp); if(ne && ne.dist*view.zoom<12){ ne.room.walls[ne.i]=activeType; draw(); return; } }
@@ -916,11 +1550,51 @@ cv.addEventListener('mousedown', e=>{
       const op={id:opId,cat:paintCat,type:activeType,rid:ne.room.id,edge:ne.i,t:edgeParam(ne.room,ne.i,wp),width:w,height:h,sill:(paintCat==='window'?2.5:0)};
       if(paintCat==='window'){ Object.assign(op,{overhang_proj:0,overhang_sep:0,shaded:false}); }
       openings.push(op); selOpening=opId; opId++; selected=null; draw(); renderSide(); return; } }
+    else if(paintCat==='terminal'){
+      const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
+      const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null};
+      ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; draw(); renderSide(); return;
+    }
+    else if(paintCat==='equip'){
+      const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
+      const n=ductEquipment.filter(x=>x.kind===activeType).length+1;
+      const eq={id:nextEquipId++, kind:activeType, point:pt, label:activeType+'-'+n, zone:null};
+      ductEquipment.push(eq); selDuctKind='equip'; selDuctId=eq.id; draw(); renderSide(); return;
+    }
+    else if(paintCat==='ductrun'){ /* placed via the "Draw Run" button + draw_duct mode below, not a direct click */ }
     else { for(let i=rooms.length-1;i>=0;i--){ if(pip(wp,rooms[i].points)){ if(paintCat==='roof') rooms[i].roof=activeType; else if(paintCat==='floor') rooms[i].floor=activeType; else if(paintCat==='zone') rooms[i].zone=activeType; else { rooms[i].type=activeType; seedLoads(rooms[i]); } draw(); return; } } }
     drag={type:'pan',last:[mx,my]}; return;   // missed a target → allow pan
   }
   // pick a window/door instance first (they sit on the walls)
   for(let k=openings.length-1;k>=0;k--){ const o=openings[k], r=rooms.find(x=>x.id===o.rid); if(!r) continue; const P=r.points,a=P[o.edge],b=P[(o.edge+1)%P.length]; const s=w2s([a[0]+(b[0]-a[0])*o.t,a[1]+(b[1]-a[1])*o.t]); if(Math.hypot(s[0]-mx,s[1]-my)<Math.max(9,(o.width*PPF*view.zoom)/2)){ selOpening=o.id; selected=null; drag={type:'opening',op:o}; renderSide(); draw(); return; } }
+  // Duct terminals/equipment/runs only grab clicks while the Ducts tab is active — they
+  // can visually sit right on top of a room, and must not steal clicks meant for room
+  // vertices/edges on the Rooms tab.
+  if(tab==='ducts'){
+    // Vertex handles: only the currently-selected run shows these (see draw()), so only it
+    // needs checking, and only before the general run/terminal/equipment hit-tests below.
+    // Same gestures as room corners: plain click+drag moves the point, alt-click deletes it
+    // (min 2 points left, same "don't go below a valid shape" guard room corners use).
+    // Shift-click an INTERIOR point instead splits the run into two pieces there — a
+    // duct-specific extra rooms don't need (see contextmenu for the right-click delete twin).
+    if(selDuctKind==='run'){ const selRun=ductRuns.find(d=>d.id===selDuctId);
+      if(selRun){
+        for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]);
+          if(Math.hypot(s[0]-mx,s[1]-my)<9){
+            if(e.altKey){ if(selRun.points.length>2) selRun.points.splice(i,1); renderSide(); draw(); }
+            else if(e.shiftKey && i>0 && i<selRun.points.length-1) splitDuctRun(selRun,i);
+            else drag={type:'ductvertex',run:selRun,vi:i};
+            return; } }
+        // edge midpoint: insert a new point there (open polyline — no wraparound past the last point)
+        for(let i=0;i<selRun.points.length-1;i++){ const a=selRun.points[i], b=selRun.points[i+1], m=w2s([(a[0]+b[0])/2,(a[1]+b[1])/2]);
+          if(Math.hypot(m[0]-mx,m[1]-my)<8){ selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); drag={type:'ductvertex',run:selRun,vi:i+1}; renderSide(); draw(); return; } }
+      }
+    }
+    for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k]; const s=w2s(t.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='terminal'; selDuctId=t.id; selected=null; selOpening=null; drag={type:'ductpoint',item:t}; renderSide(); draw(); return; } }
+    for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='equip'; selDuctId=eq.id; selected=null; selOpening=null; drag={type:'ductpoint',item:eq}; renderSide(); draw(); return; } }
+    for(let k=ductRuns.length-1;k>=0;k--){ const d=ductRuns[k]; for(let i=0;i<d.points.length-1;i++){
+      if(segDist(wp,d.points[i],d.points[i+1])*view.zoom<8){ selDuctKind='run'; selDuctId=d.id; selected=null; selOpening=null; drag={type:'ductrun',run:d,last:wp}; renderSide(); draw(); return; } } }
+  }
   const sel=rooms.find(r=>r.id===selected);
   if(sel){
     // corner: alt-click deletes (min 3), otherwise start moving it
@@ -938,24 +1612,61 @@ window.addEventListener('mousemove', e=>{
   const [mx,my]=rel(e), wp=s2w(mx,my);
   if(paintCat==='wall' && !drag){ const ne=nearestEdge(wp); const nh=(ne&&ne.dist*view.zoom<12)?ne:null;
     const changed=(nh&&(!hoverEdge||hoverEdge.room!==nh.room||hoverEdge.i!==nh.i))||(!nh&&hoverEdge); hoverEdge=nh; if(changed) draw(); }
+  if((mode==='draw_duct'||paintCat==='terminal'||paintCat==='equip') && !drag){
+    const near=nearestDuctPoint(wp); const nh=(near&&near.dist*view.zoom<12)?near.point:null;
+    hoverDuctSnap=nh; ductPreviewPt=(mode==='draw_duct'&&draft.length)?ductNextPoint(wp):null; draw();
+  }
   if(!drag) return;
   if(drag.type==='pan'){ view.panX+=mx-drag.last[0]; view.panY+=my-drag.last[1]; drag.last=[mx,my]; }
   else if(drag.type==='vertex'){ drag.room.points[drag.vi]=[wp[0],wp[1]]; if(tab==='rooms') renderSide(); }
   else if(drag.type==='room'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1]; drag.room.points=drag.room.points.map(p=>[p[0]+dx,p[1]+dy]); drag.last=wp; if(tab==='rooms') renderSide(); }
   else if(drag.type==='opening'){ const o=drag.op, r=rooms.find(x=>x.id===o.rid); if(r) o.t=edgeParam(r,o.edge,wp); }
+  else if(drag.type==='ductpoint'){ drag.item.point=[wp[0],wp[1]]; }
+  else if(drag.type==='ductvertex'){ drag.run.points[drag.vi]=[wp[0],wp[1]]; }
+  else if(drag.type==='ductrun'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1]; drag.run.points=drag.run.points.map(p=>[p[0]+dx,p[1]+dy]); drag.last=wp; }
   else if(drag.type==='measure'){ ruler.b=wp; }
   draw();
 });
 window.addEventListener('mouseup', ()=>{ drag=null; });
-cv.addEventListener('click', e=>{ if(mode!=='draw'||e.detail>1) return; const [mx,my]=rel(e); draft.push(s2w(mx,my)); draw(); });
-cv.addEventListener('dblclick', e=>{ if(mode==='draw'){ e.preventDefault(); finishDraw(); } });
-cv.addEventListener('contextmenu', e=>{ e.preventDefault(); const sel=rooms.find(r=>r.id===selected); if(!sel||paintCat) return; const [mx,my]=rel(e);
+cv.addEventListener('click', e=>{ if((mode!=='draw'&&mode!=='draw_duct')||e.detail>1) return; const [mx,my]=rel(e);
+  const wp=s2w(mx,my); draft.push(mode==='draw_duct' ? ductNextPoint(wp) : wp); draw(); });
+cv.addEventListener('dblclick', e=>{ if(mode==='draw'){ e.preventDefault(); finishDraw(); } else if(mode==='draw_duct'){ e.preventDefault(); finishDuctDraw(); } });
+cv.addEventListener('contextmenu', e=>{ e.preventDefault();
+  if(tab==='ducts' && selDuctKind==='run'){ const selRun=ductRuns.find(d=>d.id===selDuctId); if(!selRun||paintCat) return; const [mx,my]=rel(e);
+    for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(selRun.points.length>2) selRun.points.splice(i,1); renderSide(); draw(); return; } } return; }
+  const sel=rooms.find(r=>r.id===selected); if(!sel||paintCat) return; const [mx,my]=rel(e);
   for(let i=0;i<sel.points.length;i++){ const s=w2s(sel.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(sel.points.length>3){ sel.points.splice(i,1); sel.walls.splice(i,1); renderSide(); draw(); } return; } } });
-window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select'); paintCat=null; activeType=null; hoverEdge=null; ruler=null; editingType=null; cv.classList.remove('paint'); selected=null; selOpening=null; renderSide(); draw(); }
+window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select'); paintCat=null; activeType=null; hoverEdge=null; ruler=null; editingType=null; cv.classList.remove('paint'); selected=null; selOpening=null; selDuctKind=null; selDuctId=null; renderSide(); draw(); }
+  // "Lift the pen": stop the continuous duct-drawing session without deselecting the duct
+  // kind (unlike Esc, which resets everything) — same effect as re-clicking Draw Run.
+  if(e.key==='Enter' && mode==='draw_duct' && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){ setMode('select'); renderSide(); draw(); }
   if((e.key==='Delete'||e.key==='Backspace') && !paintCat && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){
     if(selOpening!=null){ openings=openings.filter(o=>o.id!==selOpening); selOpening=null; renderSide(); draw(); }
-    else if(selected!=null){ delSel(); } } });
+    else if(selected!=null){ delSel(); }
+    else if(selDuctKind==='run'){ ductRuns=ductRuns.filter(d=>d.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); }
+    else if(selDuctKind==='terminal'){ ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); }
+    else if(selDuctKind==='equip'){ ductEquipment=ductEquipment.filter(x=>x.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); } }
+  const dm = !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) && e.code.match(/^Digit([1-4])$/);
+  if(dm){
+    const idx=+dm[1]-1;
+    let list=null, cat=null;
+    if(e.altKey && !e.shiftKey){ list=EQUIPMENT_KINDS; cat='equip'; }
+    else if(e.shiftKey && !e.altKey){ list=TERMINAL_KINDS; cat='terminal'; }
+    else if(!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey){ list=DUCT_RUN_KINDS; cat='ductrun'; }
+    if(list && list[idx]){ e.preventDefault(); armDuctKeyTool(cat, list[idx][0]); }
+  } });
 
+document.getElementById('bTheme').onclick=()=>{
+  const next = document.documentElement.getAttribute('data-theme')==='dark' ? 'light' : 'dark';
+  localStorage.setItem('loadcalc-theme', next); applyTheme(next);
+};
+document.getElementById('bDuctView').onclick=()=>{
+  ductViewMode = ductViewMode==='engineer' ? 'client' : 'engineer';
+  localStorage.setItem('loadcalc-ductview', ductViewMode);
+  document.getElementById('bDuctView').textContent = ductViewMode==='engineer' ? '🔧 Engineer' : '📄 Client';
+  draw();
+};
+document.getElementById('bDuctView').textContent = ductViewMode==='engineer' ? '🔧 Engineer' : '📄 Client';
 document.getElementById('bAdd').onclick=()=>setMode(mode==='draw'?'select':'draw');
 document.getElementById('bMeasure').onclick=()=>setMode(mode==='measure'?'select':'measure');
 document.getElementById('bDel').onclick=delSel;
@@ -978,12 +1689,18 @@ function switchFloor(newIdx){
   const cur=floorMeta[currentFloorIdx];
   floorRoomsMap.set(cur.level, rooms);
   floorOpeningsMap.set(cur.level, openings);
+  floorDuctRunsMap.set(cur.level, ductRuns);
+  floorTerminalsMap.set(cur.level, ductTerminals);
+  floorEquipmentMap.set(cur.level, ductEquipment);
   cur.pxPerFt=PPF; cur.north_deg=northDeg;
 
   currentFloorIdx=newIdx;
   const f=floorMeta[currentFloorIdx];
   rooms=floorRoomsMap.get(f.level)||[];
   openings=floorOpeningsMap.get(f.level)||[];
+  ductRuns=floorDuctRunsMap.get(f.level)||[];
+  ductTerminals=floorTerminalsMap.get(f.level)||[];
+  ductEquipment=floorEquipmentMap.get(f.level)||[];
   PPF=f.pxPerFt; northDeg=f.north_deg||0;
   selected=null; selOpening=null;
   document.getElementById('bNorth').value=northDeg;
@@ -999,13 +1716,9 @@ function renderFloorSelect(){
 }
 document.getElementById('bFloor').onchange=e=>switchFloor(+e.target.value);
 document.getElementById('bNorth').oninput=e=>{ northDeg=parseFloat(e.target.value)||0; draw(); };
-document.getElementById('bSfClgRoom').oninput=e=>{ SF.clg_room=parseFloat(e.target.value)||0; };
-document.getElementById('bSfClgVent').oninput=e=>{ SF.clg_vent=parseFloat(e.target.value)||0; };
-document.getElementById('bSfHtgRoom').oninput=e=>{ SF.htg_room=parseFloat(e.target.value)||0; };
-document.getElementById('bSfHtgVent').oninput=e=>{ SF.htg_vent=parseFloat(e.target.value)||0; };
 document.getElementById('bMatchSqft').onclick=()=>{
   const target=parseFloat(document.getElementById('bTotalSqft').value);
-  if(!target || target<=0){ alert('Enter the building\'s actual total square footage first.'); return; }
+  if(!target || target<=0){ showToast('Enter the building\'s actual total square footage first.', true); return; }
   rescaleToTotalSqft(target);
 };
 function buildPayload(){
@@ -1013,10 +1726,13 @@ function buildPayload(){
   // whatever floor is on-screen right now would be saved from a stale snapshot.
   floorRoomsMap.set(floorMeta[currentFloorIdx].level, rooms);
   floorOpeningsMap.set(floorMeta[currentFloorIdx].level, openings);
+  floorDuctRunsMap.set(floorMeta[currentFloorIdx].level, ductRuns);
+  floorTerminalsMap.set(floorMeta[currentFloorIdx].level, ductTerminals);
+  floorEquipmentMap.set(floorMeta[currentFloorIdx].level, ductEquipment);
   floorMeta[currentFloorIdx].pxPerFt=PPF;
   floorMeta[currentFloorIdx].north_deg=northDeg;
 
-  const outRooms=[], outOpenings=[];
+  const outRooms=[], outOpenings=[], outDuctRuns=[], outTerminals=[], outEquipment=[];
   floorMeta.forEach(f=>{
     (floorRoomsMap.get(f.level)||[]).forEach(r=>{
       outRooms.push({id:r.id,label:r.label,type:r.type,zone:r.zone,level:f.level,
@@ -1027,6 +1743,12 @@ function buildPayload(){
         points:r.points});
     });
     (floorOpeningsMap.get(f.level)||[]).forEach(o=>outOpenings.push(o));
+    // level:f.level always wins here (not just a fallback default like the parse-time
+    // Object.assign) — a run drawn on this floor is tagged with THIS floor's level
+    // regardless of whether the in-memory object happened to carry one already.
+    (floorDuctRunsMap.get(f.level)||[]).forEach(d=>outDuctRuns.push(Object.assign({}, d, {level:f.level})));
+    (floorTerminalsMap.get(f.level)||[]).forEach(t=>outTerminals.push(Object.assign({}, t, {level:f.level})));
+    (floorEquipmentMap.get(f.level)||[]).forEach(e=>outEquipment.push(Object.assign({}, e, {level:f.level})));
   });
   const totalSqft=floorMeta.reduce((t,f)=>t+(floorRoomsMap.get(f.level)||[]).reduce((tt,r)=>tt+polyAreaFt(r.points,f.pxPerFt),0),0);
 
@@ -1036,7 +1758,8 @@ function buildPayload(){
     // name — otherwise seedLoads() breaks on every reload/resume (RT_REC[name] comes
     // back undefined, so changing a room's type stops updating its loads at all).
     room_types:ROOM_TYPE_LIB.map(function(n){ return RT_REC[n]||{name:n}; }),
-    zones:ZONE_LIB,openings:outOpenings,rooms:outRooms};
+    zones:ZONE_LIB,openings:outOpenings,rooms:outRooms,
+    duct_runs:outDuctRuns,duct_terminals:outTerminals,duct_equipment:outEquipment};
 }
 function downloadJson(payload){
   const b=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
@@ -1065,9 +1788,9 @@ document.getElementById('bRunCalc').onclick=async()=>{
     window.open('/results.html','_blank');
   }catch(e){
     downloadJson(payload); lastSavedJSON=JSON.stringify(payload); btn.textContent=orig;
-    alert('Could not reach the local server to run the calc (saved the JSON to your downloads instead).\n\n'
+    showToast('Could not reach the local server to run the calc (saved the JSON to your downloads instead).\n'
           +'Make sure this was opened via "python3 loadcalc.py parse ..." and that terminal is still running, '
-          +'then reload this page at its http://127.0.0.1:PORT address.\n\n'+e.message);
+          +'then reload this page at its http://127.0.0.1:PORT address.\n'+e.message, true);
   } finally { btn.disabled=false; }
 };
 
@@ -1082,10 +1805,6 @@ window.addEventListener('beforeunload', e=>{
 
 renderFloorSelect();
 document.getElementById('bNorth').value = northDeg;
-document.getElementById('bSfClgRoom').value = SF.clg_room;
-document.getElementById('bSfClgVent').value = SF.clg_vent;
-document.getElementById('bSfHtgRoom').value = SF.htg_room;
-document.getElementById('bSfHtgVent').value = SF.htg_vent;
 img.onload=()=>{ fitWhenReady(); };
 img.src=floorMeta[currentFloorIdx].image;
 window.addEventListener('resize', resize);
