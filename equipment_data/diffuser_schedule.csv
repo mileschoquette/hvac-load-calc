@@ -1,0 +1,22 @@
+manufacturer,model_line,terminal_kind,neck_or_face_size,cfm_min,cfm_max,source_url,notes
+Titus,PAS,ceiling_supply,6" dia neck,59,104,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Perforated flush-face steel ceiling diffuser 12x12 module; range spans neck velocity 300-1400 fpm
+Titus,PAS,ceiling_supply,8" dia neck,105,163,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Perforated flush-face steel ceiling diffuser 16x16 module; range spans neck velocity 300-1400 fpm
+Titus,PAS,ceiling_supply,10" dia neck,164,235,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Perforated flush-face steel ceiling diffuser 20x20 module; range spans neck velocity 300-1400 fpm
+Titus,PAS,ceiling_supply,12" dia neck,236,320,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Perforated flush-face steel ceiling diffuser 24x24 module; range spans neck velocity 300-1400 fpm
+Titus,PAS,ceiling_supply,14" dia neck,321,1497,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Perforated flush-face steel ceiling diffuser 24x24 module; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,6" dia neck (12x12 face),59,207,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,10x10 in neck (24x24 face),208,234,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,12" dia neck (24x24 face),235,319,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,14" dia neck (24x24 face),320,457,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,10x22 in neck (12x24 face),458,674,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,PAR,ceiling_return,18x18 in neck (24x24 face),675,2400,https://www.titus-hvac.com/file/841/perforatedperf_diffusers_2017.pdf,Flush-face perforated return diffuser; range spans neck velocity 300-1400 fpm
+Titus,300RS / 300RL,sidewall_supply,6x6 in,57,110,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,Double-deflection steel supply grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,300RS / 300RL,sidewall_supply,8x8 in,111,176,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,Double-deflection steel supply grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,300RS / 300RL,sidewall_supply,10x10 in,177,263,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,Double-deflection steel supply grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,300RS / 300RL,sidewall_supply,12x12 in,264,332,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,Double-deflection steel supply grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,300RS / 300RL,sidewall_supply,18x10 in,333,1554,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,Double-deflection steel supply grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,350RL / 350RS,sidewall_return,6x6 in,19,58,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,35 deg fixed-blade steel return grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,350RL / 350RS,sidewall_return,10x10 in,59,134,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,35 deg fixed-blade steel return grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,350RL / 350RS,sidewall_return,18x12 in,135,245,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,35 deg fixed-blade steel return grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,350RL / 350RS,sidewall_return,24x16 in,246,256,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,35 deg fixed-blade steel return grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm
+Titus,350RL / 350RS,sidewall_return,20x20 in,257,2313,https://www.titus-hvac.com/file/1007/300_350_2017.pdf,35 deg fixed-blade steel return grille; 3/4in blade spacing; range spans core velocity 300-1400 fpm

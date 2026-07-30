@@ -46,6 +46,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 import export_review
 from engine.compute import compute_building
+from engine.ducts import size_duct_network, duct_report_data
 from engine.report import render_report
 
 
@@ -160,29 +161,48 @@ def _weather(types):
     return {k: v for k, v in w.items() if v is not None}
 
 
-def _run_calc(review):
-    """Shared by `loadcalc.py calc` and the review UI's "Run Load Calc" button:
-    review packet -> compute_building -> results.html. Reads loadcalc_input.json
-    fresh off disk each time, so edits to it (e.g. re-exported DM types) are
-    picked up without restarting anything."""
+def _duct_design(ps):
+    """Duct sizing design criteria from project_settings — same _f()-based resolution as
+    _weather() (a dict of possibly-None values; the consumer, size_duct_network, applies
+    the documented defaults), not the None-safe safety-factor-style helper, since none of
+    these have a legitimate deliberate zero the way a safety factor does."""
+    return {"supply_delta_t": _f(ps, "duct_supply_delta_t"),
+            "trunk_velocity_fpm": _f(ps, "duct_trunk_velocity_fpm"),
+            "branch_velocity_fpm": _f(ps, "duct_branch_velocity_fpm"),
+            "trunk_height_in": _f(ps, "duct_trunk_height_in")}
+
+
+def _merged_types(review):
+    """loadcalc_input.json (`tj`), with the review UI's Project/Weather tab edits (saved
+    into rooms_edited.json / `review`) overlaid onto its project_settings — those edits
+    must win over the original baseline, or they silently never reach the calc. This was a
+    real bug: editing e.g. longitude in that panel had no effect on results.html, because
+    the calc only ever read loadcalc_input.json's project_settings, never the saved
+    review's. Shared by every entry point that needs project_settings (`_run_calc`, duct
+    sizing) — reads loadcalc_input.json fresh off disk each time, so edits to it (e.g.
+    re-exported DM types) are picked up without restarting anything."""
     types_path = ROOT / "loadcalc_input.json"
     tj = json.loads(types_path.read_text()) if types_path.exists() else {}
-    # The review UI's Project/Weather tab edits project_settings and saves it into
-    # rooms_edited.json (`review`) — those edits must win over loadcalc_input.json's
-    # original baseline, or they silently never reach the calc. This was a real bug:
-    # editing e.g. longitude in that panel had no effect on results.html, because this
-    # only ever read loadcalc_input.json's project_settings, never the saved review's.
     merged_ps = {**(tj.get("project_settings") or {}), **(review.get("project_settings") or {})}
-    tj = {**tj, "project_settings": merged_ps}
+    return {**tj, "project_settings": merged_ps}
+
+
+def _run_calc(review):
+    """Shared by `loadcalc.py calc` and the review UI's "Run Load Calc" button:
+    review packet -> compute_building -> results.html."""
+    tj = _merged_types(review)
+    merged_ps = tj["project_settings"]
     w = _weather(tj)
     month = w.pop("month", 8)
     result = compute_building(review, w, month=month)
+    result["ducts"] = duct_report_data(review, result, _duct_design(merged_ps))
     plan_uri = None
     p = ROOT / "plan.png"
     if p.exists():
         plan_uri = "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
     proj = merged_ps.get("project_name", "") or tj.get("job", "")
     html = render_report(result, project_name=proj, plan_datauri=plan_uri,
+                         duct_plan_datauri=review.get("duct_plan_png"),
                          generated=datetime.now().strftime("%Y-%m-%d %H:%M"))
     (ROOT / "results.html").write_text(html)
     return result
@@ -390,6 +410,23 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                   f"({b['total_btuh']:,.0f} Btu/h, {len(result['rooms'])} rooms)")
             self._json({"ok": True, "tons": b["tons"], "btuh": b["total_btuh"],
                         "rooms": len(result["rooms"])})
+        elif self.path == "/api/size_ducts":
+            # Lighter-weight than /api/calc — just the RTS sensible loads (for terminal
+            # CFM) and the duct network math, no report.html write. Returns only the
+            # fields that changed, keyed by id, so the browser can merge them into the
+            # live drawing without disturbing anything the engineer already edited.
+            try:
+                tj = _merged_types(review)
+                w = _weather(tj)
+                month = w.pop("month", 8)
+                result = compute_building(review, w, month=month)
+                sized = size_duct_network(review, result, _duct_design(tj["project_settings"]))
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+            print(f"sized ducts from the browser -> {len(sized['duct_runs'])} runs, "
+                  f"{len(sized['duct_terminals'])} terminals, {len(sized['duct_equipment'])} air handlers")
+            self._json({"ok": True, **sized})
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 

@@ -1,0 +1,15 @@
+manufacturer,model,nominal_tons,cooling_capacity_btuh,refrigerant,source_url,notes
+Rheem,RA13NZ24AJ1NA,2,24000,R-410A,https://airmanagementsupply.com/advancedwebpage.aspx?linkpartnumber=240324,Endeavor Legacy/Classic series; 13.4 SEER2; single-stage residential/light commercial split condenser
+Trane,4TTR7024A1000B,2,24000,R-410A,https://www.trane.com/content/dam/Trane/Commercial/global/products-systems/equipment/unitary/split-systems/Small%20Splits/Air%20Conditioners/4TTR7%20(XR17).pdf,XR17 2-stage Climatuff scroll compressor; nominal capacity per official product data sheet
+Trane,4TTR7036A1000B,3,36000,R-410A,https://www.trane.com/content/dam/Trane/Commercial/global/products-systems/equipment/unitary/split-systems/Small%20Splits/Air%20Conditioners/4TTR7%20(XR17).pdf,XR17 2-stage Climatuff scroll compressor
+Rheem,RA13NZ48AJ1NA,4,48000,R-410A,https://airmanagementsupply.com/advancedwebpage.aspx?linkpartnumber=240348,Endeavor Legacy/Classic series; 13.4 SEER2; single-stage
+Trane,4TTR7048A1000A,4,48000,R-410A,https://www.trane.com/content/dam/Trane/Commercial/global/products-systems/equipment/unitary/split-systems/Small%20Splits/Air%20Conditioners/4TTR7%20(XR17).pdf,XR17 2-stage Climatuff scroll compressor
+Trane,4TTR7060A1000A,5,60000,R-410A,https://www.trane.com/content/dam/Trane/Commercial/global/products-systems/equipment/unitary/split-systems/Small%20Splits/Air%20Conditioners/4TTR7%20(XR17).pdf,XR17 2-stage Climatuff scroll compressor
+Daikin (Goodman),DX11TA0904,7.5,93000,R-410A,https://www.johnstonesupply.com/product-view?pID=B60-947,11.2 EER commercial 3-phase 460V condensing unit; matched to Daikin/Goodman commercial air handler
+Carrier,38AUZ(D-E)07/40RF07,6,70000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit condensing unit; AHRI net cooling capacity; matched to 40RF/40RU air handler
+Carrier,38AUZ(D-E)08/40RF08,7.5,92000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit condensing unit; AHRI net cooling capacity
+Carrier,38AUZ(M-N)12/40RF12,10,117000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit condensing unit; AHRI net cooling capacity
+Carrier,38AUZ(M-N)14/40RU14,12.5,135000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit condensing unit; AHRI net cooling capacity
+Carrier,38AUZ(A-B)16/40RU16,15,184000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit dual-compressor condensing unit; AHRI net cooling capacity
+Carrier,38AUZ(A-B)25/40RU25,20,240000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series single-circuit dual-compressor condensing unit; AHRI net cooling capacity
+Carrier,38AUD(T-U)28/40RU28,25,278000,R-410A (Puron),https://www.shareddocs.com/hvac/docs/1005/Public/08/38AU-7-28-01PD.pdf,Gemini series dual-circuit three-stage condensing unit; AHRI net cooling capacity; largest size in this catalog family

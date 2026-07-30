@@ -4,9 +4,10 @@ mainHeader/otherHeader/otherData section structure) so it reads like the
 document engineers already know, instead of a modern dashboard. Built entirely
 from `compute_building`'s result — nothing here is computed, only formatted.
 
-Sections DM has that this doesn't: Supply Air Requirements and Psychrometrics —
-those need an air-side system design this engine doesn't do (duct/diffuser CFM
-sizing, psychrometric process points). Rather than fake those, they're left out.
+Sections DM has that this doesn't: Psychrometrics — that needs an actual
+psychrometric process-point calc this engine doesn't do. Supply Air
+Requirements and a Duct/Diffuser Schedule ARE included (see `_supply_air`/
+`_duct_schedule`), built from `engine.ducts`'s auto-sizing.
 """
 from __future__ import annotations
 
@@ -202,6 +203,56 @@ def _heating_detail(rooms, heating_db):
     return _table("Heating Load Details — Room", len(cols), subtitle, cols, rows)
 
 
+def _supply_air(supply_air):
+    cols = ["Room", "Area", "Sensible Btu/h", "Supply ΔT", "Required CFM"]
+    rows = ""
+    for s in supply_air:
+        rows += ("<tr>" + _td(s["room"], False) + _td(f"{s['area_sqft']:,.0f} ft²")
+                  + _td(f"{s['sensible_btuh']:,.0f}") + _td(f"{s['delta_t']:.0f}°F")
+                  + _td(f"{s['cfm']:,.0f}") + "</tr>")
+    total_cfm = sum(s["cfm"] for s in supply_air)
+    rows += (f"<tr><td class='otherData' colspan='4'><div class='right'><b>Total Required Supply CFM</b></div></td>"
+             f"<td class='otherData'><div class='right'><b>{total_cfm:,.0f}</b></div></td></tr>")
+    subtitle = ("CFM = Sensible Btu/h / (1.1 x Supply ΔT) — the standard sensible-air-quantity formula; "
+                "not a full psychrometric process")
+    return _table("Supply Air Requirements", len(cols), subtitle, cols, rows)
+
+
+def _suggested_model(row, model_key="matched_model"):
+    """"Manufacturer Model" (equipment) or "Manufacturer ModelLine Size" (diffuser) when a
+    catalog match exists, "—" when it doesn't (no match found, or a kind — DH — that never
+    gets one). `clamped` isn't shown here; it's informational, not load-bearing for the tag."""
+    manufacturer = row.get("matched_manufacturer")
+    if not manufacturer:
+        return "—"
+    if model_key == "matched_model":
+        return f"{manufacturer} {row.get('matched_model')}"
+    return f"{manufacturer} {row.get('matched_model_line')} {row.get('matched_size')}"
+
+
+def _duct_schedule(ducts):
+    out = ""
+    if ducts.get("equipment"):
+        cols = ["Tag", "Kind", "Total CFM", "Suggested Model"]
+        rows = "".join("<tr>" + _td(e["tag"], False) + _td(e["kind"], False)
+                        + _td(f"{e['cfm']:,.0f}" if e.get("cfm") is not None else "—")
+                        + _td(_suggested_model(e), False) + "</tr>"
+                        for e in ducts["equipment"])
+        out += _table("Air Handling Equipment", len(cols), col_headers=cols, rows=rows)
+    cols = ["Duct", "Size", "CFM", "Zone"]
+    rows = "".join("<tr>" + _td(r["kind"], False) + _td(r["size"], False)
+                    + _td(f"{r['cfm']:,.0f}" if r.get("cfm") is not None else "—") + _td(r["zone"], False) + "</tr>"
+                    for r in ducts.get("schedule", []))
+    out += _table("Duct Schedule", len(cols), col_headers=cols, rows=rows)
+    cols = ["Tag", "Type", "Size", "CFM", "Zone", "Suggested Model"]
+    rows = "".join("<tr>" + _td(t["tag"], False) + _td(t["kind"], False) + _td(t["size"], False)
+                    + _td(f"{t['cfm']:,.0f}" if t.get("cfm") is not None else "—") + _td(t["zone"], False)
+                    + _td(_suggested_model(t, "matched_model_line"), False) + "</tr>"
+                    for t in ducts.get("terminals", []))
+    out += _table("Diffuser / Grille Schedule", len(cols), col_headers=cols, rows=rows)
+    return out
+
+
 def _air_balance(ab):
     net = ab["net_cfm"]
     status = ("✓ Positive — building is not under-pressured" if net >= 0 else
@@ -299,7 +350,7 @@ def _load_summary(title, rows_data, note=""):
     return table + (f"<p class='note'>{note}</p>" if note else "")
 
 
-def render_report(result, project_name="", plan_datauri=None, generated=""):
+def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=None, generated=""):
     d, b = result["design"], result["building"]
     rooms = result["rooms"]
     envelope = result.get("envelope", [])
@@ -327,11 +378,22 @@ def render_report(result, project_name="", plan_datauri=None, generated=""):
 
     plan = (f"<table><thead><tr><th class='mainHeader'>Reviewed Floor Plan</th></tr></thead>"
             f"<tr><td class='otherData' style='text-align:center'>"
-            f"<img src='{plan_datauri}' style='max-width:100%'></td></tr></table>") if plan_datauri else ""
+            f"<img class='report-img' src='{plan_datauri}' style='max-width:100%'></td></tr></table>") if plan_datauri else ""
+
+    duct_plan = (f"<table><thead><tr><th class='mainHeader'>Duct Plan</th></tr></thead>"
+            f"<tr><td class='otherData' style='text-align:center'>"
+            f"<img class='report-img' src='{duct_plan_datauri}' style='max-width:100%'></td></tr></table>"
+            f"<p class='note'>Double-line outline = rigid trunk (rectangular or round), sized to true width. "
+            f"Corrugated/coiled outline = flexible branch. Blue centerline = supply duct, orange = return duct "
+            f"(engineer markup only). Square icon = ceiling supply diffuser, circle = ceiling return, arrow = "
+            f"sidewall grille. Square/circle equipment icons = air handler / dehumidifier / condensing unit "
+            f"(AH/DH/CU).</p>") if duct_plan_datauri else ""
 
     air_balance_section = _air_balance(result["air_balance"]) if result.get("air_balance") else ""
     ventilation_schedule_section = (_ventilation_schedule(result["ventilation_schedule"])
                                     if result.get("ventilation_schedule") else "")
+    supply_air_section = _supply_air(result["ducts"]["supply_air"]) if result.get("ducts") else ""
+    duct_schedule_section = _duct_schedule(result["ducts"]) if result.get("ducts") else ""
     sf_footnote = _safety_factor_footnote(d)
 
     sections = [
@@ -348,10 +410,13 @@ def render_report(result, project_name="", plan_datauri=None, generated=""):
         ventilation_schedule_section,
         _cooling_detail(rooms, d["month"]),
         _heating_detail(rooms, d["heating_db"]),
+        supply_air_section,
         _load_summary("Load Total Summary — Room (Building)", building_row),
         zones_section,
         floors_section,
         air_balance_section,
+        duct_plan,
+        duct_schedule_section,
         plan,
     ]
 
@@ -373,8 +438,16 @@ def render_report(result, project_name="", plan_datauri=None, generated=""):
   .right {{ text-align: right; font-variant-numeric: tabular-nums; }}
   .note {{ color: #444; font-size: 11.5px; margin: -12px 0 20px; font-style: italic; }}
   .pagebreak {{ border: 0; border-top: 2px dashed #999; margin: 24px 0; }}
+  .print-btn {{ font: 13px Georgia, serif; padding: 6px 14px; margin: 0 0 14px; cursor: pointer; }}
+  @media print {{
+    .no-print {{ display: none; }}
+    tr {{ page-break-inside: avoid; }}
+    table {{ page-break-inside: avoid; }}
+    img.report-img {{ max-width: 100%; height: auto; }}
+  }}
 </style></head><body>
   <h1>Cooling &amp; Heating Load Results{(' — ' + project_name) if project_name else ''}</h1>
+  <button class="print-btn no-print" onclick="window.print()">&#128424; Print / Save as PDF</button>
   <p class="sub">ASHRAE Handbook-Fundamentals Ch.18 · cooling: Radiant Time Series, peak {MONTHS[b['peak_month']]} {_hour12(b['peak_hour'])} · heating: steady-state, {d['heating_db']:.0f}°F design{(' · generated ' + generated) if generated else ''}</p>
   {"<hr class='pagebreak'>".join(sections)}
   {sf_footnote}

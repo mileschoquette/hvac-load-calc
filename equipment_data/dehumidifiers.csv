@@ -1,0 +1,14 @@
+manufacturer,model,capacity_pints_per_day,rated_cfm,source_url,notes
+Santa Fe (Therma-Stor),Compact70 (4033600),70,150,https://www.santa-fe-products.com/wp-content/uploads/2020/07/SF-Compact70-Data-Sheet.pdf,Blower CFM at 0.0 in WG; crawlspace/basement duct-mount unit; sizing up to 1800-2600 sq ft
+Santa Fe (Therma-Stor),Ultra70 (4033730),70,150,https://www.amgair.com/content/documents/SantaFeUltra/Santa-Fe-Ultra70-Data-Sheet.pdf,Blower CFM at 0.0 in WG; compact low-clearance whole-home unit; formerly Ultra-Aire 70H
+Santa Fe (Therma-Stor),Ultra98,100,320,https://www.santa-fe-products.com/product/ultra98-dehumidifier/,CFM at 0.0 in WG (297 CFM at 0.2 in; 215 CFM at 0.4 in); formerly Ultra-Aire 98H
+Santa Fe (Therma-Stor),Ultra120,118,350,https://www.santa-fe-products.com/product/ultra120-dehumidifier/,CFM at 0.0 in WG (285 CFM at 0.2 in; 210 CFM at 0.4 in); formerly Ultra-Aire 120H; horizontal cabinet
+Santa Fe (Therma-Stor),Ultra205,205,526,https://www.santa-fe-products.com/product/ultra205-dehumidifier/,CFM at 0.0 in WG (495 CFM at 0.2 in; 458 CFM at 0.4 in); formerly Ultra-Aire XT205H; up to 5000 sq ft
+Quest (Therma-Stor),Quest 155 (4046120),155,500,https://www.questclimate.com/dehumidifiers/quest-155/,Commercial/light-agricultural dehumidifier; rating at 80F/60% RH
+Quest (Therma-Stor),Quest 225 (4046100),225,650,https://www.questclimate.com/wp-content/uploads/2023/10/Quest-225-208-230v-Manual.pdf,650 CFM at 0.6 in WG with duct collars on; M-CoRR heat-recycling coil design
+Quest (Therma-Stor),Quest 335 (4046200),345,900,https://www.questclimate.com/dehumidifiers/quest-335/,208/230V commercial unit; 8.2 pints/kWh; multi-coil M-CoRR design
+Quest (Therma-Stor),Quest 506 (4036600),506,1500,https://www.questclimate.com/dehumidifiers/quest-506/,Legacy R-410A model; discontinued/replaced by low-GWP refrigerant successor
+Quest (Therma-Stor),Quest 746 480V (4046320),730,1650,https://www.questclimate.com/dehumidifiers/quest-746-480v/,480V 3-phase industrial/commercial unit; current published rating (previously marketed near 746 pints under prior refrigerant)
+Aprilaire,E070,70,200,https://www.cameronashleybp.com/ASSETS/DOCUMENTS/ITEMS/EN/aprilaire-e070-dehumidifier-specification-sheet-960.pdf,CFM at 0.0 in wc dry coil (170 CFM at 0.2 in; 140 CFM at 0.4 in); crawl space model
+Aprilaire,E080,80,185,https://www.radonaway.com/pdfs/radon-newsletters/pdfs/aprilaire-e080-dehumidifier-specification-sheet.pdf,CFM at 0.0 in wc (135 CFM at 0.2 in; 85 CFM at 0.4 in); R-32 refrigerant; basement model
+Aprilaire,E100,100,280,https://s3.amazonaws.com/bb-cms/AppData/Websites/1116/Documents/Aprilaire-E100-Spec-Sheet.pdf,CFM at 0.0 in wc dry coil (245 CFM at 0.2 in; 210 CFM at 0.4 in)

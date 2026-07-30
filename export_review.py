@@ -354,6 +354,7 @@ HTML = r"""<!doctype html>
     <div class="lg-row">Double-line outline = Rigid trunk (rect, sized W×H) or a Round duct (sized by diameter) — both true to scale, labeled with size (e.g. "18X18" or "10Ø")</div>
     <div class="lg-row">Corrugated/coiled outline = Flexible insulated branch, labeled with diameter + CFM (e.g. "6Ø · 120 cfm")</div>
     <div class="lg-row">Rect/Round/Flex is figured out automatically from how runs connect — a run stays rect unless it tees off another run's middle, which makes it a flex branch with a plain round collar (no taper) at the takeoff, like a real spin-in fitting. Select a run — edit it exactly like a room: drag a dot to move it, alt/right-click a dot to delete it, click an orange + at a midpoint to add one, drag the body to move the whole run. Shift-click an interior dot to split the run into two independent pieces, then force either piece's Form (Auto/Rect/Round/Flex) in the side panel if the auto result isn't what you want.</div>
+    <div class="lg-row">The dot you last clicked/dragged turns solid blue — that's the pivot for <b>Straighten</b> (like DM's Next/Previous tool): the <kbd>[</kbd>/<kbd>]</kbd> keys (or the buttons in the side panel) snap the previous/next segment to whichever is closer — running straight on (0°/180°) or turning a clean corner (±90°) — off the other one, pivoting at that dot. Pivoting at one of a run's two END dots (where it's otherwise got nothing of its own to compare against) instead straightens that run against whatever OTHER run it's connected to there — e.g. squaring a branch up to the trunk it tees off of.</div>
     <div class="lg-row"><b>Diffusers &amp; Grilles</b></div>
     <div class="lg-row">▢ Ceiling supply diffuser &nbsp;·&nbsp; ◯ Ceiling return &nbsp;·&nbsp; → Sidewall supply/return (blue outline = supply, green = return)</div>
     <div class="lg-row"><b>Equipment</b></div>
@@ -426,10 +427,11 @@ const _allDuctRuns = (D.duct_runs||[]).map(d=>{
   const r = Object.assign({level:(d.level!=null?d.level:1)}, d);
   if(r.system==null && r.kind!=null){ r.system = r.kind.indexOf('supply')>=0 ? 'supply' : 'return'; r.form = r.kind.indexOf('rigid')===0 ? 'rect' : 'flex'; delete r.kind; }
   if(r.form==null) r.form = 'auto';
+  if(r.auto==null) r.auto = true;   // 📐 Auto-Size Ducts only overwrites cfm/size where this is true
   return r;
 });
 let nextDuctRunId = _allDuctRuns.reduce((m,d)=>Math.max(m,d.id),-1)+1;
-const _allDuctTerminals = (D.duct_terminals||[]).map(t=>Object.assign({level:(t.level!=null?t.level:1)}, t));
+const _allDuctTerminals = (D.duct_terminals||[]).map(t=>Object.assign({level:(t.level!=null?t.level:1), auto:true}, t));
 let nextTerminalId = _allDuctTerminals.reduce((m,t)=>Math.max(m,t.id),-1)+1;
 const _allDuctEquipment = (D.duct_equipment||[]).map(e=>Object.assign({level:(e.level!=null?e.level:1)}, e));
 let nextEquipId = _allDuctEquipment.reduce((m,e)=>Math.max(m,e.id),-1)+1;
@@ -445,6 +447,13 @@ _allOpenings.forEach(o=>{ const lvl=_roomLevelById.get(o.rid); if(lvl==null) ret
 _allDuctRuns.forEach(d=>{ if(!floorDuctRunsMap.has(d.level)) floorDuctRunsMap.set(d.level, []); floorDuctRunsMap.get(d.level).push(d); });
 _allDuctTerminals.forEach(t=>{ if(!floorTerminalsMap.has(t.level)) floorTerminalsMap.set(t.level, []); floorTerminalsMap.get(t.level).push(t); });
 _allDuctEquipment.forEach(e=>{ if(!floorEquipmentMap.has(e.level)) floorEquipmentMap.set(e.level, []); floorEquipmentMap.get(e.level).push(e); });
+
+// Every duct run/terminal/equipment across ALL floors, live object references (not the
+// current floor's working array) — 📐 Auto-Size Ducts' server response can touch any
+// floor's entities, not just the one currently being viewed.
+function allDuctRunsLive(){ return [].concat(...floorDuctRunsMap.values()); }
+function allDuctTerminalsLive(){ return [].concat(...floorTerminalsMap.values()); }
+function allDuctEquipmentLive(){ return [].concat(...floorEquipmentMap.values()); }
 
 let rooms = floorRoomsMap.get(floorMeta[currentFloorIdx].level) || [];
 let openings = floorOpeningsMap.get(floorMeta[currentFloorIdx].level) || [];
@@ -512,6 +521,7 @@ const TERMINAL_KINDS = [['ceiling_supply','Ceiling Supply Diffuser'],['ceiling_r
   ['sidewall_supply','Sidewall Supply'],['sidewall_return','Sidewall Return']];
 const EQUIPMENT_KINDS = [['AH','Air Handler'],['CU','Condensing Unit'],['DH','Dehumidifier']];
 let selDuctKind=null, selDuctId=null;   // currently selected placed duct item (for its property form) — kind is 'run'|'terminal'|'equip'
+let selDuctVertex=null;   // for kind==='run': index of the last-touched vertex on that run, used as the pivot for the Straighten Next/Previous tool below
 function ductLabel(kindList, key){ const f=kindList.find(k=>k[0]===key); return f?f[1]:key; }
 // Every project's wall/roof/floor palette must start with a "No X load" entry —
 // a real DM-setup JSON's wall_types/roof_types/floor_types is just the site's
@@ -925,11 +935,11 @@ function resize(){
 function fit(){ const f=floorMeta[currentFloorIdx]; const z=Math.min(VW/f.pageW, VH/f.pageH)*0.96; view.zoom=z;
   view.panX=(VW-f.pageW*z)/2; view.panY=(VH-f.pageH*z)/2; }
 
-function draw(){
+function draw(printMode){
   ctx.clearRect(0,0,VW,VH);
   const _f=floorMeta[currentFloorIdx];
   if(img.complete && img.naturalWidth) ctx.drawImage(img, view.panX, view.panY, _f.pageW*view.zoom, _f.pageH*view.zoom);
-  rooms.forEach(r=>{
+  if(!printMode) rooms.forEach(r=>{
     const sp=r.points.map(w2s);
     ctx.beginPath(); sp.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath();
     const rc=typeColor('roof', r.roof);
@@ -951,7 +961,7 @@ function draw(){
     if(r.floor && r.floor!=='No floor load'){ ctx.fillStyle='#374151'; ctx.font='10px sans-serif'; ctx.fillText('▼ '+r.floor, c[0], yy); }
   });
   // window/door instances sitting on their walls
-  openings.forEach(o=>{ const r=rooms.find(x=>x.id===o.rid); if(!r) return; const P=r.points, a=P[o.edge], b=P[(o.edge+1)%P.length];
+  if(!printMode) openings.forEach(o=>{ const r=rooms.find(x=>x.id===o.rid); if(!r) return; const P=r.points, a=P[o.edge], b=P[(o.edge+1)%P.length];
     const pt=[a[0]+(b[0]-a[0])*o.t, a[1]+(b[1]-a[1])*o.t]; const d=uvec(b[0]-a[0],b[1]-a[1]); const half=(o.width*PPF)/2;
     const s1=w2s([pt[0]-d[0]*half,pt[1]-d[1]*half]), s2=w2s([pt[0]+d[0]*half,pt[1]+d[1]*half]);
     const col=o.cat==='window'?'#0284c7':'#a16207', on=(selOpening===o.id);
@@ -979,7 +989,10 @@ function draw(){
       for(let i=0;i<selRun.points.length-1;i++){ const a=selRun.points[i], b=selRun.points[i+1], m=w2s([(a[0]+b[0])/2,(a[1]+b[1])/2]);
         ctx.beginPath(); ctx.arc(m[0],m[1],4,0,7); ctx.fillStyle='rgba(234,88,12,0.9)'; ctx.fill();
         ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(m[0]-2.2,m[1]); ctx.lineTo(m[0]+2.2,m[1]); ctx.moveTo(m[0],m[1]-2.2); ctx.lineTo(m[0],m[1]+2.2); ctx.stroke(); }
-      selRun.points.forEach(p=>{ const s=w2s(p); ctx.beginPath(); ctx.arc(s[0],s[1],5,0,7); ctx.fillStyle='#fff'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#ea580c'; ctx.stroke(); });
+      // The active vertex (last clicked/dragged — the Straighten Next/Previous pivot) fills
+      // solid blue instead of white, so it's clear which joint those buttons will act on.
+      selRun.points.forEach((p,i)=>{ const s=w2s(p), active=(i===selDuctVertex);
+        ctx.beginPath(); ctx.arc(s[0],s[1],5,0,7); ctx.fillStyle=active?'#2563eb':'#fff'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#ea580c'; ctx.stroke(); });
     }
   }
   const sel=rooms.find(r=>r.id===selected);
@@ -1018,6 +1031,28 @@ function draw(){
   document.getElementById('stat').textContent = rooms.length+' rooms · '+total().toFixed(0)+' ft² total';
 }
 
+// Renders the current floor's duct layer only (no room fills/labels, no openings) into a
+// hi-res PNG for the printable report, then restores the live on-screen view exactly as
+// it was — this must be side-effect-free from the user's perspective.
+function captureDuctPlanImage(){
+  if(ductRuns.length===0) return null;
+  const savedSelected=selected, savedSelOpening=selOpening, savedSelDuctKind=selDuctKind, savedSelDuctId=selDuctId;
+  selected=null; selOpening=null; selDuctKind=null; selDuctId=null;
+  const savedW=cv.width, savedH=cv.height, savedView=Object.assign({},view);
+  fit();
+  const scale=3;
+  cv.width=Math.round(VW*scale); cv.height=Math.round(VH*scale);
+  ctx.setTransform(scale,0,0,scale,0,0);
+  draw(true);
+  const dataUri=cv.toDataURL('image/png');
+  cv.width=savedW; cv.height=savedH;
+  const dpr=window.devicePixelRatio||1; ctx.setTransform(dpr,0,0,dpr,0,0);
+  view=savedView;
+  selected=savedSelected; selOpening=savedSelOpening; selDuctKind=savedSelDuctKind; selDuctId=savedSelDuctId;
+  draw();
+  return dataUri;
+}
+
 const HINTS = {draw:'Drawing a room: click to drop each corner, double-click to finish, Esc to cancel.',
   draw_duct:'Drawing a duct run: click to drop each point (snaps to nearby network points, otherwise to 45°), double-click to finish this run and start the next one, Enter/Esc to stop.',
   measure:'Measure: click and drag between two points to see the distance. Esc to clear.'};
@@ -1054,6 +1089,13 @@ const PROJECT_FIELDS=[['project_name','Project Name'],['weather_station','Weathe
   ['clear_sky_taub','Clear-sky τb'],['clear_sky_taud','Clear-sky τd']];
 const SF_FIELDS=[['clg_room','Cooling — Room %'],['clg_vent','Cooling — Ventilation %'],
   ['htg_room','Heating — Room %'],['htg_vent','Heating — Ventilation %']];
+// Duct Design Criteria — plain project_settings fields (like the weather ones above, not
+// their own top-level dict like Safety Factors), read by engine/ducts.py's size_duct_network
+// via loadcalc.py's _duct_design(). Blank = the documented default in engine/ducts.py.
+const DUCT_DESIGN_FIELDS=[['duct_trunk_velocity_fpm','Trunk/Round Velocity (fpm) — default 900'],
+  ['duct_branch_velocity_fpm','Branch/Flex Velocity (fpm) — default 700'],
+  ['duct_trunk_height_in','Trunk Height (in) — default 10'],
+  ['duct_supply_delta_t','Supply Air ΔT (°F) — default 20']];
 function projectPanel(){
   let h='<div class="selblock"><h3>Project / Weather</h3>';
   h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Design conditions for this project\'s actual location — sourced from ASHRAE Fundamentals Ch.14 (or an equivalent regional table); there\'s no live weather lookup here. Manual values entered here take priority over any bundled station match and over the engine\'s Florida-representative defaults.</div>';
@@ -1064,6 +1106,11 @@ function projectPanel(){
   h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Design margin on top of the calculated loads, project-wide. Room = envelope + internal gains; Vent = ventilation/infiltration/exhaust-makeup outdoor air — tracked separately since DM\'s own report does. Defaults (5/0/10/0%) are pre-filled with a rationale footnoted on the results report; edit here to override for this project.</div>';
   h+='<div class="loadgrid">';
   SF_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input type="number" step="1" class="sf" data-k="'+f[0]+'" value="'+SF[f[0]]+'">'; });
+  h+='</div>';
+  h+='<h3 style="margin-top:18px">Duct Design Criteria</h3>';
+  h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Used by 📐 Auto-Size Ducts (Ducts tab) to turn each run\'s CFM into a size — velocity method, not equal-friction. Leave blank to use the default.</div>';
+  h+='<div class="loadgrid">';
+  DUCT_DESIGN_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input class="pf" data-k="'+f[0]+'" value="'+(PS[f[0]]!=null?String(PS[f[0]]).replace(/"/g,'&quot;'):'')+'">'; });
   h+='</div></div>';
   return h;
 }
@@ -1089,12 +1136,14 @@ function ductsPanel(){
     +ZONE_LIB.map(z=>'<option'+(z===v?' selected':'')+'>'+z+'</option>').join('')+'</select>';
 
   let h='<div class="selblock"><h3>Ducts</h3>';
+  h+='<button class="con-add" id="bAutoSizeDucts" title="Derives each terminal\'s CFM from the room it sits in, sums that up through the drawn network, and sizes every run/terminal from the Duct Design Criteria (Project/Weather tab). Skips anything with its Auto-size checkbox off.">📐 Auto-Size Ducts</button>';
   if(item){
     if(kind==='run'){
       const ef=effectiveForm(item), isRect=(ef==='rect');
       h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(DUCT_RUN_KINDS,item.system)+' — '+ductLabel(DUCT_FORM_OPTS,ef)+(item.form==='auto'?' (auto)':' (forced)')
-        +'<br><span style="font-size:11px">Edit it like a room: drag a dot to move it, alt/right-click to delete it (min 2 points), click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it into two independently-editable pieces.</span></div><div class="loadgrid">';
+        +'<br><span style="font-size:11px">Edit it like a room: drag a dot to move it, alt/right-click to delete it (min 2 points), click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it into two independently-editable pieces. Straighten (below) pivots at whichever dot is solid blue — the one you last clicked or dragged.</span></div><div class="loadgrid">';
       h+='<label>Form</label><select class="df" data-f="form">'+DUCT_FORM_OPTS.map(([k,l])=>'<option value="'+k+'"'+(item.form===k?' selected':'')+'>'+l+'</option>').join('')+'</select>';
+      h+='<label>Auto-size this</label><input type="checkbox" class="df" data-f="auto" style="width:auto;justify-self:start"'+(item.auto!==false?' checked':'')+'>';
       h+='<label>CFM</label><input type="number" step="any" class="df" data-f="cfm" value="'+(item.cfm!=null?item.cfm:'')+'">';
       if(isRect){
         h+='<label>Width (in)</label><input type="number" step="any" class="df" data-f="width_in" value="'+(item.width_in!=null?item.width_in:'')+'">';
@@ -1103,8 +1152,21 @@ function ductsPanel(){
         h+='<label>Diameter (in)</label><input type="number" step="any" class="df" data-f="diameter_in" value="'+(item.diameter_in!=null?item.diameter_in:'')+'">';
       }
       h+=zoneField(item.zone)+'</div>';
+      if(selDuctVertex!=null && selDuctVertex>=0 && selDuctVertex<item.points.length){
+        const isInterior=selDuctVertex>0 && selDuctVertex<item.points.length-1;
+        const crossRun=!isInterior && connectionAt(item, item.points[selDuctVertex]);
+        const canStraighten=isInterior || !!crossRun;
+        h+='<div style="font-size:11px;color:var(--ink-muted);margin:10px 0 4px">Straighten (DM-style Next/Previous) — snaps '
+          +(isInterior ? 'the segment on either side of the dot you last clicked/dragged'
+                       : (crossRun ? 'this run\'s segment at that end-dot, against the OTHER run it connects to,'
+                                   : 'the segment at that end-dot — but it isn\'t touching another run, so there\'s nothing to straighten against'))
+          +' to whichever is closer to its current angle: running straight on, or turning a clean 90° corner, off the other segment.</div>';
+        h+='<div class="tf-row"><button class="con-add" id="bStraightenPrev"'+(canStraighten?'':' disabled')+'>⌐ Previous [</button>'
+          +'<button class="con-add" id="bStraightenNext"'+(canStraighten?'':' disabled')+'>Next ] ⌐</button></div>';
+      }
     } else if(kind==='terminal'){
       h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(TERMINAL_KINDS,item.kind)+'</div><div class="loadgrid">';
+      h+='<label>Auto-size CFM</label><input type="checkbox" class="df" data-f="auto" style="width:auto;justify-self:start"'+(item.auto!==false?' checked':'')+'>';
       h+='<label>CFM</label><input type="number" step="any" class="df" data-f="cfm" value="'+(item.cfm!=null?item.cfm:'')+'">';
       h+='<label>Size</label><input class="df" data-f="size" value="'+(item.size!=null?String(item.size).replace(/"/g,'&quot;'):'')+'">';
       h+=zoneField(item.zone)+'</div>';
@@ -1115,7 +1177,7 @@ function ductsPanel(){
     }
     h+='<button class="danger" id="ductDel">Delete this item</button>';
   } else {
-    h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Pick Supply or Return below, then just draw — rect/round/flex is figured out automatically (trunk stays rect; anything that tees off an existing run becomes flex with a round collar at the takeoff). Select a run and edit it just like a room: drag a dot to move it, alt/right-click to delete it, click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it and force either piece to Rect/Round/Flex yourself. Terminals/equipment: one click places it.<br><b>Keyboard:</b> 1-2 draw a run (Supply/Return) · Shift+1-4 place a terminal (Ceil.Sup/Ret, Sidewall Sup/Ret) · Alt+1-3 place equipment (AH/CU/DH) · press again to deselect.</div>';
+    h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">Pick Supply or Return below, then just draw — rect/round/flex is figured out automatically (trunk stays rect; anything that tees off an existing run becomes flex with a round collar at the takeoff). Select a run and edit it just like a room: drag a dot to move it, alt/right-click to delete it, click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it and force either piece to Rect/Round/Flex yourself. Straighten (DM-style Next/Previous) snaps the segment next to whichever dot you last touched (shown solid blue) to the closest clean angle — straight on or a 90° corner — off the other one — <kbd>[</kbd> Previous, <kbd>]</kbd> Next, or use the buttons that appear below once a dot is active. Terminals/equipment: one click places it.<br><b>Keyboard:</b> 1-2 draw a run (Supply/Return) · Shift+1-4 place a terminal (Ceil.Sup/Ret, Sidewall Sup/Ret) · Alt+1-3 place equipment (AH/CU/DH) · [ / ] straighten previous/next · press again to deselect.</div>';
     h+='<h3 style="margin-top:4px">Duct Runs</h3><div class="types">';
     DUCT_RUN_KINDS.forEach(([key,label])=>{ const on=(paintCat==='ductrun'&&activeType===key);
       h+='<div class="chip'+(on?' on':'')+'" data-dcat="ductrun" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
@@ -1148,24 +1210,43 @@ function ductsPanel(){
 function armDuctKeyTool(cat, key){
   if(paintCat===cat && activeType===key){ paintCat=null; activeType=null; setMode('select'); }
   else {
-    paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; tab='ducts';
+    paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; selDuctVertex=null; tab='ducts';
     if(cat==='ductrun') setMode('draw_duct'); else if(mode==='draw_duct') setMode('select');
   }
   cv.classList.toggle('paint', paintCat==='terminal'||paintCat==='equip');
   renderSide(); draw();
 }
 function wireDucts(){
+  const sizeBtn=document.getElementById('bAutoSizeDucts');
+  if(sizeBtn) sizeBtn.onclick=async()=>{
+    const orig=sizeBtn.textContent;
+    sizeBtn.disabled=true; sizeBtn.textContent='Sizing…';
+    try{
+      const res=await postJson('/api/size_ducts', buildPayload());
+      const runs=allDuctRunsLive(), terms=allDuctTerminalsLive(), equips=allDuctEquipmentLive();
+      let nRuns=0, nTerms=0, nEquip=0;
+      Object.entries(res.duct_runs||{}).forEach(([id,patch])=>{ const r=runs.find(x=>String(x.id)===id); if(r){ Object.assign(r,patch); nRuns++; } });
+      Object.entries(res.duct_terminals||{}).forEach(([id,patch])=>{ const t=terms.find(x=>String(x.id)===id); if(t){ Object.assign(t,patch); nTerms++; } });
+      Object.entries(res.duct_equipment||{}).forEach(([id,patch])=>{ const e=equips.find(x=>String(x.id)===id); if(e){ Object.assign(e,patch); nEquip++; } });
+      renderSide(); draw();
+      showToast('Auto-sized '+nRuns+' run'+(nRuns===1?'':'s')+', '+nTerms+' terminal'+(nTerms===1?'':'s')
+        +(nEquip?', '+nEquip+' air handler'+(nEquip===1?'':'s'):'')+'. Anything with "Auto-size" unchecked was left alone.');
+    }catch(e){
+      showToast('Could not reach the local server to auto-size ducts.\n'
+        +'Make sure this was opened via "python3 loadcalc.py parse ..." and that terminal is still running.\n'+e.message, true);
+    } finally { sizeBtn.disabled=false; sizeBtn.textContent=orig; }
+  };
   document.querySelectorAll('#side [data-dcat][data-dkey]').forEach(el=>el.onclick=()=>{
     const cat=el.dataset.dcat, key=el.dataset.dkey;
     if(paintCat===cat && activeType===key){ paintCat=null; activeType=null; setMode('select'); }
-    else { paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; if(mode==='draw_duct') setMode('select'); }
+    else { paintCat=cat; activeType=key; selDuctKind=null; selDuctId=null; selDuctVertex=null; if(mode==='draw_duct') setMode('select'); }
     cv.classList.toggle('paint', paintCat==='terminal'||paintCat==='equip');
     renderSide(); draw();
   });
   const drawBtn=document.getElementById('bDrawDuct');
   if(drawBtn) drawBtn.onclick=()=>{ setMode(mode==='draw_duct'?'select':'draw_duct'); renderSide(); };
   document.querySelectorAll('#ductList .row').forEach(el=>el.onclick=()=>{
-    selDuctKind=el.dataset.dcat; selDuctId=+el.dataset.did; paintCat=null; activeType=null; cv.classList.remove('paint'); renderSide(); draw();
+    selDuctKind=el.dataset.dcat; selDuctId=+el.dataset.did; selDuctVertex=null; paintCat=null; activeType=null; cv.classList.remove('paint'); renderSide(); draw();
   });
   document.querySelectorAll('#side .df').forEach(el=>{
     const ev = el.tagName==='SELECT' ? 'onchange' : 'oninput';
@@ -1176,8 +1257,16 @@ function wireDucts(){
       else if(selDuctKind==='equip') item=ductEquipment.find(e=>e.id===selDuctId);
       if(!item) return;
       const f=el.dataset.f, v=el.value;
-      item[f] = (el.tagName==='SELECT'||f==='label'||f==='size') ? v : (v===''?null:parseFloat(v));
-      if(f==='form') renderSide(); // Rect vs Round/Flex shows a different size field — re-render, not just re-draw
+      if(f==='auto') item.auto=el.checked;
+      else {
+        item[f] = (el.tagName==='SELECT'||f==='label'||f==='size') ? v : (v===''?null:parseFloat(v));
+        // A manual edit to anything 📐 Auto-Size Ducts would otherwise compute is a
+        // deliberate override — stick with it across future Auto-Size runs until the
+        // checkbox above is re-checked (same "seed, don't silently clobber" precedent as
+        // seedLoads() elsewhere).
+        if(['cfm','width_in','height_in','diameter_in','size'].includes(f)) item.auto=false;
+      }
+      if(f==='form'||f==='auto') renderSide(); // Rect vs Round/Flex (or the checkbox state) needs a re-render, not just a re-draw
       draw();
     };
   });
@@ -1186,14 +1275,17 @@ function wireDucts(){
     if(selDuctKind==='run') ductRuns=ductRuns.filter(d=>d.id!==selDuctId);
     else if(selDuctKind==='terminal') ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId);
     else if(selDuctKind==='equip') ductEquipment=ductEquipment.filter(e=>e.id!==selDuctId);
-    selDuctKind=null; selDuctId=null; renderSide(); draw();
+    selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw();
   };
+  const prevBtn=document.getElementById('bStraightenPrev'), nextBtn=document.getElementById('bStraightenNext');
+  if(prevBtn) prevBtn.onclick=()=>{ const run=ductRuns.find(d=>d.id===selDuctId); if(run) straightenDuctVertex(run, selDuctVertex, 'previous'); };
+  if(nextBtn) nextBtn.onclick=()=>{ const run=ductRuns.find(d=>d.id===selDuctId); if(run) straightenDuctVertex(run, selDuctVertex, 'next'); };
 }
 function finishDuctDraw(){
   if(draft.length>=2){
     const d={id:nextDuctRunId++, system:activeType, form:'auto', points:draft.slice(), cfm:null,
-      width_in:null, height_in:null, diameter_in:null, zone:null};
-    ductRuns.push(d); selDuctKind='run'; selDuctId=d.id;
+      width_in:null, height_in:null, diameter_in:null, zone:null, auto:true};
+    ductRuns.push(d); selDuctKind='run'; selDuctId=d.id; selDuctVertex=null;
   }
   // Stay armed in draw_duct mode ("pick the pen up, keep drawing") instead of dropping back
   // to select — lets a whole branching system (trunk + branches) be drawn in one continuous
@@ -1209,8 +1301,62 @@ function splitDuctRun(run, i){
   const twin = Object.assign({}, run, {id: nextDuctRunId++, points: run.points.slice(i)});
   run.points = run.points.slice(0, i+1);
   ductRuns.push(twin);
-  selDuctKind='run'; selDuctId=run.id;
+  selDuctKind='run'; selDuctId=run.id; selDuctVertex=null;
   renderSide(); draw();
+}
+// DM's "Next"/"Previous" straighten tool: pivot at vertex `i`, using the OTHER segment
+// (the one not being adjusted) as the fixed reference direction. Rotates the far endpoint
+// of the segment being straightened around the pivot, preserving that segment's own
+// length, to whichever of the two perpendicular directions needs the least rotation from
+// where it is now (so it never unexpectedly flips to the far side).
+// Reference segment for straightening when the pivot is an ENDPOINT of `run` — there's no
+// same-run neighbor to compare against there, so look at whatever OTHER run touches this
+// point instead. Unlike findTeePoint, endpoint-to-endpoint touches count here too (not
+// just a mid-span tee) — even a plain straight continuation into another run is a valid
+// thing to straighten against. Returns the connected run's [a,b] segment, or null.
+function connectionAt(run, pt){
+  let best=null;
+  ductRuns.forEach(r=>{
+    if(r.id===run.id) return;
+    for(let i=0;i<r.points.length-1;i++){
+      const a=r.points[i], b=r.points[i+1], cs=closestOnSeg(pt,a,b);
+      if(cs.dist>1.5) continue;
+      if(!best||cs.dist<best.dist) best=[a,b];
+    }
+  });
+  return best;
+}
+function straightenDuctVertex(run, i, dir){
+  const pts=run.points;
+  let pivot, refA, refB, targetIdx;
+  if(i>0 && i<pts.length-1){
+    // Interior pivot: reference = the OTHER segment at this same run's own vertex.
+    pivot=pts[i];
+    refA = (dir==='next') ? pts[i-1] : pts[i+1];
+    refB = pivot;
+    targetIdx = (dir==='next') ? i+1 : i-1;
+  } else if(i===0 || i===pts.length-1){
+    // Endpoint pivot: no same-run neighbor on the outside — reference = whatever other
+    // run this endpoint connects to (a branch tee-in, or a plain end-to-end join).
+    pivot=pts[i];
+    const seg=connectionAt(run, pivot);
+    if(!seg) return;
+    [refA,refB]=seg;
+    targetIdx = (i===0) ? 1 : pts.length-2;
+  } else return;
+  // "Closest 90° angle" means the closest of FOUR options relative to the reference —
+  // continuing straight (0°/180°, i.e. parallel) or turning a clean corner (±90°) — not
+  // always a forced right-angle turn. Picking only the two perpendiculars (as this used
+  // to) would "straighten" a nearly-straight run into an unwanted right-angle kink instead
+  // of actually straightening it.
+  const curPt = pts[targetIdx];
+  const rx=refB[0]-refA[0], ry=refB[1]-refA[1], rlen=Math.hypot(rx,ry)||1, refx=rx/rlen, refy=ry/rlen;
+  const cx=curPt[0]-pivot[0], cy=curPt[1]-pivot[1], clen=Math.hypot(cx,cy)||1;
+  const candidates=[[refx,refy],[-refx,-refy],[-refy,refx],[refy,-refx]];
+  let chosen=candidates[0], bestDot=-Infinity;
+  for(const c of candidates){ const d=c[0]*cx+c[1]*cy; if(d>bestDot){ bestDot=d; chosen=c; } }
+  pts[targetIdx]=[pivot[0]+chosen[0]*clen, pivot[1]+chosen[1]*clen];
+  draw();
 }
 
 const LOAD_FIELDS=[['lpd','Lighting (W/ft²)'],['epd','Equipment (W/ft²)'],['equip_latent','Equipment Latent (Btu/h) — cooking/dishwashing etc.'],['occ','Occupants'],
@@ -1552,14 +1698,14 @@ cv.addEventListener('mousedown', e=>{
       openings.push(op); selOpening=opId; opId++; selected=null; draw(); renderSide(); return; } }
     else if(paintCat==='terminal'){
       const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
-      const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null};
-      ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; draw(); renderSide(); return;
+      const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null, auto:true};
+      ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; draw(); renderSide(); return;
     }
     else if(paintCat==='equip'){
       const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
       const n=ductEquipment.filter(x=>x.kind===activeType).length+1;
       const eq={id:nextEquipId++, kind:activeType, point:pt, label:activeType+'-'+n, zone:null};
-      ductEquipment.push(eq); selDuctKind='equip'; selDuctId=eq.id; draw(); renderSide(); return;
+      ductEquipment.push(eq); selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; draw(); renderSide(); return;
     }
     else if(paintCat==='ductrun'){ /* placed via the "Draw Run" button + draw_duct mode below, not a direct click */ }
     else { for(let i=rooms.length-1;i>=0;i--){ if(pip(wp,rooms[i].points)){ if(paintCat==='roof') rooms[i].roof=activeType; else if(paintCat==='floor') rooms[i].floor=activeType; else if(paintCat==='zone') rooms[i].zone=activeType; else { rooms[i].type=activeType; seedLoads(rooms[i]); } draw(); return; } } }
@@ -1581,19 +1727,19 @@ cv.addEventListener('mousedown', e=>{
       if(selRun){
         for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]);
           if(Math.hypot(s[0]-mx,s[1]-my)<9){
-            if(e.altKey){ if(selRun.points.length>2) selRun.points.splice(i,1); renderSide(); draw(); }
+            if(e.altKey){ if(selRun.points.length>2) selRun.points.splice(i,1); selDuctVertex=null; renderSide(); draw(); }
             else if(e.shiftKey && i>0 && i<selRun.points.length-1) splitDuctRun(selRun,i);
-            else drag={type:'ductvertex',run:selRun,vi:i};
+            else { drag={type:'ductvertex',run:selRun,vi:i}; selDuctVertex=i; }
             return; } }
         // edge midpoint: insert a new point there (open polyline — no wraparound past the last point)
         for(let i=0;i<selRun.points.length-1;i++){ const a=selRun.points[i], b=selRun.points[i+1], m=w2s([(a[0]+b[0])/2,(a[1]+b[1])/2]);
-          if(Math.hypot(m[0]-mx,m[1]-my)<8){ selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); drag={type:'ductvertex',run:selRun,vi:i+1}; renderSide(); draw(); return; } }
+          if(Math.hypot(m[0]-mx,m[1]-my)<8){ selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); drag={type:'ductvertex',run:selRun,vi:i+1}; selDuctVertex=i+1; renderSide(); draw(); return; } }
       }
     }
-    for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k]; const s=w2s(t.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='terminal'; selDuctId=t.id; selected=null; selOpening=null; drag={type:'ductpoint',item:t}; renderSide(); draw(); return; } }
-    for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='equip'; selDuctId=eq.id; selected=null; selOpening=null; drag={type:'ductpoint',item:eq}; renderSide(); draw(); return; } }
+    for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k]; const s=w2s(t.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:t}; renderSide(); draw(); return; } }
+    for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:eq}; renderSide(); draw(); return; } }
     for(let k=ductRuns.length-1;k>=0;k--){ const d=ductRuns[k]; for(let i=0;i<d.points.length-1;i++){
-      if(segDist(wp,d.points[i],d.points[i+1])*view.zoom<8){ selDuctKind='run'; selDuctId=d.id; selected=null; selOpening=null; drag={type:'ductrun',run:d,last:wp}; renderSide(); draw(); return; } } }
+      if(segDist(wp,d.points[i],d.points[i+1])*view.zoom<8){ selDuctKind='run'; selDuctId=d.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductrun',run:d,last:wp}; renderSide(); draw(); return; } } }
   }
   const sel=rooms.find(r=>r.id===selected);
   if(sel){
@@ -1633,19 +1779,19 @@ cv.addEventListener('click', e=>{ if((mode!=='draw'&&mode!=='draw_duct')||e.deta
 cv.addEventListener('dblclick', e=>{ if(mode==='draw'){ e.preventDefault(); finishDraw(); } else if(mode==='draw_duct'){ e.preventDefault(); finishDuctDraw(); } });
 cv.addEventListener('contextmenu', e=>{ e.preventDefault();
   if(tab==='ducts' && selDuctKind==='run'){ const selRun=ductRuns.find(d=>d.id===selDuctId); if(!selRun||paintCat) return; const [mx,my]=rel(e);
-    for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(selRun.points.length>2) selRun.points.splice(i,1); renderSide(); draw(); return; } } return; }
+    for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(selRun.points.length>2) selRun.points.splice(i,1); selDuctVertex=null; renderSide(); draw(); return; } } return; }
   const sel=rooms.find(r=>r.id===selected); if(!sel||paintCat) return; const [mx,my]=rel(e);
   for(let i=0;i<sel.points.length;i++){ const s=w2s(sel.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(sel.points.length>3){ sel.points.splice(i,1); sel.walls.splice(i,1); renderSide(); draw(); } return; } } });
-window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select'); paintCat=null; activeType=null; hoverEdge=null; ruler=null; editingType=null; cv.classList.remove('paint'); selected=null; selOpening=null; selDuctKind=null; selDuctId=null; renderSide(); draw(); }
+window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select'); paintCat=null; activeType=null; hoverEdge=null; ruler=null; editingType=null; cv.classList.remove('paint'); selected=null; selOpening=null; selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
   // "Lift the pen": stop the continuous duct-drawing session without deselecting the duct
   // kind (unlike Esc, which resets everything) — same effect as re-clicking Draw Run.
   if(e.key==='Enter' && mode==='draw_duct' && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){ setMode('select'); renderSide(); draw(); }
   if((e.key==='Delete'||e.key==='Backspace') && !paintCat && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){
     if(selOpening!=null){ openings=openings.filter(o=>o.id!==selOpening); selOpening=null; renderSide(); draw(); }
     else if(selected!=null){ delSel(); }
-    else if(selDuctKind==='run'){ ductRuns=ductRuns.filter(d=>d.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); }
-    else if(selDuctKind==='terminal'){ ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); }
-    else if(selDuctKind==='equip'){ ductEquipment=ductEquipment.filter(x=>x.id!==selDuctId); selDuctKind=null; selDuctId=null; renderSide(); draw(); } }
+    else if(selDuctKind==='run'){ ductRuns=ductRuns.filter(d=>d.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
+    else if(selDuctKind==='terminal'){ ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
+    else if(selDuctKind==='equip'){ ductEquipment=ductEquipment.filter(x=>x.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); } }
   const dm = !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) && e.code.match(/^Digit([1-4])$/);
   if(dm){
     const idx=+dm[1]-1;
@@ -1654,6 +1800,12 @@ window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select');
     else if(e.shiftKey && !e.altKey){ list=TERMINAL_KINDS; cat='terminal'; }
     else if(!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey){ list=DUCT_RUN_KINDS; cat='ductrun'; }
     if(list && list[idx]){ e.preventDefault(); armDuctKeyTool(cat, list[idx][0]); }
+  }
+  // Straighten Next/Previous (DM's "Next"/"Previous" tool): pivots at the last-touched
+  // vertex of the selected run, squaring up the next/previous segment to 90° off the other.
+  if((e.key===']'||e.key==='[') && selDuctKind==='run' && selDuctVertex!=null && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){
+    const run=ductRuns.find(d=>d.id===selDuctId);
+    if(run){ e.preventDefault(); straightenDuctVertex(run, selDuctVertex, e.key===']' ? 'next' : 'previous'); }
   } });
 
 document.getElementById('bTheme').onclick=()=>{
@@ -1780,6 +1932,8 @@ document.getElementById('bSave').onclick=async()=>{
 };
 document.getElementById('bRunCalc').onclick=async()=>{
   const btn=document.getElementById('bRunCalc'), payload=buildPayload(), orig=btn.textContent;
+  const ductPlanPng=captureDuctPlanImage();
+  if(ductPlanPng) payload.duct_plan_png=ductPlanPng;
   btn.disabled=true; btn.textContent='Running…';
   try{
     await postJson('/api/calc',payload);
