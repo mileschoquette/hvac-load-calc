@@ -212,7 +212,11 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
     out from the dropped JSON's shape whether this is a first-time project
     (DM-setup types JSON) or resuming one (a saved rooms_edited.json — it has
     a "rooms" key, a types JSON doesn't), and parses/resumes accordingly.
-    Returns True if resumed, False if freshly parsed."""
+    Returns (resumed, weather_warning): resumed is True if resuming, False if freshly
+    parsed; weather_warning is _weather()'s fallback message (surfaced here, before the
+    user ever runs a calc, instead of only deep inside the final report) when this
+    project's weather station will fall back to the Florida-representative defaults,
+    else None."""
     name = Path(pdf_name or "plans.pdf").name or "plans.pdf"
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
@@ -231,6 +235,20 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
             resumed = True
         else:
             (ROOT / "loadcalc_input.json").write_text(json_text)
+
+    # Same _weather() resolution used at report time, just run now instead of only
+    # after a full calc — so a project whose weather_station won't resolve (no
+    # stations.json match, no manual values) gets flagged before the user does any
+    # more work on it, not after reading the generated report.
+    review = {}
+    re_path = ROOT / "rooms_edited.json"
+    if re_path.exists():
+        try:
+            review = json.loads(re_path.read_text())
+        except json.JSONDecodeError:
+            review = {}
+    weather_source = _weather(_merged_types(review)).get("weather_source", "")
+    weather_warning = weather_source if weather_source.startswith("UNVERIFIED") else None
 
     pages = _parse_pages_arg(page)
     ppfs = _parse_ppf_arg(ppf, len(pages))
@@ -266,7 +284,7 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
         pg.get_pixmap(matrix=fitz.Matrix(0.7, 0.7)).save(str(ROOT / "plan.png"))
     except Exception:
         pass
-    return resumed
+    return resumed, weather_warning
 
 
 APP_HTML = (Path(__file__).parent / "templates" / "landing.html").read_text()
@@ -309,14 +327,14 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/start":
             try:
                 req = json.loads(raw)
-                resumed = _start_project(
+                resumed, weather_warning = _start_project(
                     base64.b64decode(req["pdf_b64"]), req.get("pdf_name"),
                     req.get("json_text"), req.get("ppf") or "18.0",
                     float(req.get("min_len") or 1.0), req.get("page") or "0")
             except Exception as e:
                 self._json({"ok": False, "error": str(e)}, 500)
                 return
-            self._json({"ok": True, "resumed": resumed})
+            self._json({"ok": True, "resumed": resumed, "weather_warning": weather_warning})
             return
         try:
             review = json.loads(raw)

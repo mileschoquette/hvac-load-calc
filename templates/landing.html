@@ -21,6 +21,7 @@
   .status{margin-top:14px;font-size:13.5px;display:flex;align-items:center;gap:8px}
   .status.err{color:#b91c1c}
   .status.ok{color:#15803d}
+  .warnFlag{color:#b45309;font-weight:600}
   .spinner{width:14px;height:14px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:spin .7s linear infinite;flex:none;display:none}
   .status.busy .spinner{display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -97,7 +98,10 @@ document.getElementById('bStart').onclick=async()=>{
     const res=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data=await res.json();
     if(!res.ok || data.ok===false) throw new Error(data.error||('server error '+res.status));
-    status.className='status ok'; msg.textContent=(data.resumed?'Resumed — ':'Parsed — ')+'opening the review UI…';
+    status.className='status ok';
+    msg.innerHTML=(data.resumed?'Resumed — ':'Parsed — ')+'opening the review UI…'
+      +(data.weather_warning?` <span class="warnFlag">⚠ ${data.weather_warning}</span>`:'');
+    if(data.weather_warning) await new Promise(r=>setTimeout(r,1800)); // give the warning a beat to be read before navigating away
     window.location='/review.html';
   }catch(e){
     status.className='status err'; msg.textContent='Error: '+e.message;
