@@ -95,6 +95,9 @@
   .legend summary { cursor:pointer; color:var(--ink-soft); font-weight:600; }
   .legend .lg-row { display:flex; align-items:center; gap:6px; margin:4px 0 0 2px; }
   .legend .lg-sw { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
+  #kbdHint { font-size:11px; color:var(--ink-muted); padding:6px 12px; border-top:1px solid var(--border); }
+  #kbdHint kbd { background:var(--surface-alt); border:1px solid var(--border); border-radius:3px; padding:0 4px; font-size:10px; }
+  #kbdHint a { color:var(--accent); cursor:pointer; }
   .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--bar-bg); color:var(--bar-text);
     padding:10px 16px; border-radius:8px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25); z-index:50;
     opacity:0; pointer-events:none; transition:opacity .15s; max-width:520px; text-align:center; white-space:pre-line; }
@@ -125,6 +128,7 @@
     <div id="side"></div>
   </div>
   <div id="hint"></div>
+  <div id="kbdHint">Shortcuts (click the canvas first): <kbd>1</kbd>/<kbd>2</kbd> draw a run &nbsp;·&nbsp; <kbd>Shift</kbd>+<kbd>1-4</kbd> place a terminal &nbsp;·&nbsp; <kbd>Alt</kbd>+<kbd>1-3</kbd> place equipment &nbsp;·&nbsp; <kbd>[</kbd>/<kbd>]</kbd> straighten &nbsp;·&nbsp; <kbd>Enter</kbd>/<kbd>Esc</kbd> stop drawing &nbsp;·&nbsp; <a id="jumpDuctLegend">full legend &darr;</a></div>
   <details class="legend">
     <summary>What do the colors mean?</summary>
     <div class="lg-row">Room fill tint = its assigned <b>Roof type</b>'s color (matches that type's swatch in the Construction tab)</div>
@@ -135,7 +139,7 @@
     <div class="lg-row">▲ Roof label &nbsp;·&nbsp; ▼ Floor label (shown when assigned, below the room name)</div>
     <div class="lg-row">Tip: every type's swatch color in the <b>Construction</b> tab is exactly what you'll see drawn on the plan.</div>
   </details>
-  <details class="legend">
+  <details class="legend" id="ductLegend">
     <summary>Duct / HVAC Symbols</summary>
     <div class="lg-row"><b>Ductwork</b> (black — matches the plan's own line weight, same as a real submittal set)</div>
     <div class="lg-row">Double-line outline = Rigid trunk (rect, sized W×H) or a Round duct (sized by diameter) — both true to scale, labeled with size (e.g. "18X18" or "10Ø")</div>
@@ -177,6 +181,13 @@ function showToast(msg, isErr){
   toastTimer=setTimeout(()=>{ t.className='toast'; }, isErr?8000:2200);
 }
 document.getElementById('toast').onclick=()=>{ clearTimeout(toastTimer); document.getElementById('toast').className='toast'; };
+
+// The full shortcut list lives in the collapsed "Duct / HVAC Symbols" legend below the
+// canvas; the persistent #kbdHint strip surfaces just enough to be discoverable, and this
+// link expands + scrolls to that legend for the rest.
+document.getElementById('jumpDuctLegend').onclick=()=>{
+  const d=document.getElementById('ductLegend'); d.open=true; d.scrollIntoView({behavior:'smooth', block:'start'});
+};
 
 // ── Multi-floor state ────────────────────────────────────────────────────────
 // Each floor keeps its own plan image/scale/north AND its own rooms/openings.
@@ -1165,12 +1176,7 @@ function wireDucts(){
     };
   });
   const delBtn=document.getElementById('ductDel');
-  if(delBtn) delBtn.onclick=()=>{
-    if(selDuctKind==='run') ductRuns=ductRuns.filter(d=>d.id!==selDuctId);
-    else if(selDuctKind==='terminal') ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId);
-    else if(selDuctKind==='equip') ductEquipment=ductEquipment.filter(e=>e.id!==selDuctId);
-    selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw();
-  };
+  if(delBtn) delBtn.onclick=()=>deleteDuctItem(selDuctKind, selDuctId);
   const prevBtn=document.getElementById('bStraightenPrev'), nextBtn=document.getElementById('bStraightenNext');
   if(prevBtn) prevBtn.onclick=()=>{ const run=ductRuns.find(d=>d.id===selDuctId); if(run) straightenDuctVertex(run, selDuctVertex, 'previous'); };
   if(nextBtn) nextBtn.onclick=()=>{ const run=ductRuns.find(d=>d.id===selDuctId); if(run) straightenDuctVertex(run, selDuctVertex, 'next'); };
@@ -1357,7 +1363,7 @@ function wireRooms(){
     const _i0=document.getElementById('oIac0'); if(_i0) _i0.oninput=e=>{ op.iac0=parseFloat(e.target.value); };
     const _i60=document.getElementById('oIac60'); if(_i60) _i60.oninput=e=>{ op.iac60=parseFloat(e.target.value); };
     const _idf=document.getElementById('oIacDiff'); if(_idf) _idf.oninput=e=>{ op.iac_diffuse=parseFloat(e.target.value); };
-    document.getElementById('oDel').onclick=()=>{ openings=openings.filter(x=>x.id!==op.id); selOpening=null; renderSide(); draw(); };
+    document.getElementById('oDel').onclick=()=>deleteOpening(op.id);
   } else if(sel){
     document.getElementById('fLabel').oninput=e=>{ sel.label=e.target.value; draw(); const row=document.querySelector('#list .row[data-id="'+sel.id+'"] span'); if(row) row.textContent=sel.label; };
     document.getElementById('fType').onchange=e=>{ sel.type=e.target.value; seedLoads(sel); renderSide(); draw(); };
@@ -1600,7 +1606,26 @@ function delType(cat,name){
   renderSide(); draw();
 }
 
-function delSel(){ if(selected==null) return; rooms=rooms.filter(r=>r.id!==selected); selected=null; renderSide(); draw(); }
+// Native confirm() dialogs below are a deliberate stopgap for destructive deletes (rooms,
+// openings, duct items) — a misclick here permanently loses work with no undo, unlike
+// delType() above (a construction-tab type, recoverable by re-adding it with the same
+// name/values). The rest of this UI avoids native dialogs (see the toast comment above),
+// but this one case is pragmatic: a blocking "are you sure" beats building undo/redo.
+function delSel(){ if(selected==null) return; if(!confirm('Delete this room? This cannot be undone.')) return; rooms=rooms.filter(r=>r.id!==selected); selected=null; renderSide(); draw(); }
+function deleteOpening(id){
+  const op=openings.find(o=>o.id===id); if(!op) return;
+  if(!confirm('Delete this '+op.cat+'? This cannot be undone.')) return;
+  openings=openings.filter(o=>o.id!==id); selOpening=null; renderSide(); draw();
+}
+function deleteDuctItem(kind,id){
+  if(!kind || id==null) return;
+  const label = kind==='run'?'duct run':kind==='terminal'?'duct terminal':'duct equipment item';
+  if(!confirm('Delete this '+label+'? This cannot be undone.')) return;
+  if(kind==='run') ductRuns=ductRuns.filter(d=>d.id!==id);
+  else if(kind==='terminal') ductTerminals=ductTerminals.filter(t=>t.id!==id);
+  else if(kind==='equip') ductEquipment=ductEquipment.filter(e=>e.id!==id);
+  selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw();
+}
 function finishDraw(){ if(draft.length>=3){ const r={id:nextId++, label:'ROOM '+nextId, type:'', zone:'', points:draft.slice(), roof:'No roof load', floor:'No floor load', ceiling_ft:'', floor_to_floor_ft:'', carpet:true, loads:{}, walls:draft.map(function(){return 'No wall load';})}; rooms.push(r); selected=r.id; } setMode('select'); renderSide(); draw(); }
 
 cv.addEventListener('wheel', e=>{ e.preventDefault(); const f=e.deltaY<0?1.1:1/1.1; const [mx,my]=rel(e); const w=s2w(mx,my); view.zoom*=f; view.panX=mx-w[0]*view.zoom; view.panY=my-w[1]*view.zoom; draw(); }, {passive:false});
@@ -1751,11 +1776,9 @@ window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select');
   // kind (unlike Esc, which resets everything) — same effect as re-clicking Draw Run.
   if(e.key==='Enter' && mode==='draw_duct' && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){ setMode('select'); renderSide(); draw(); }
   if((e.key==='Delete'||e.key==='Backspace') && !paintCat && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){
-    if(selOpening!=null){ openings=openings.filter(o=>o.id!==selOpening); selOpening=null; renderSide(); draw(); }
+    if(selOpening!=null){ deleteOpening(selOpening); }
     else if(selected!=null){ delSel(); }
-    else if(selDuctKind==='run'){ ductRuns=ductRuns.filter(d=>d.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
-    else if(selDuctKind==='terminal'){ ductTerminals=ductTerminals.filter(t=>t.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
-    else if(selDuctKind==='equip'){ ductEquipment=ductEquipment.filter(x=>x.id!==selDuctId); selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); } }
+    else if(selDuctKind){ deleteDuctItem(selDuctKind, selDuctId); } }
   const dm = !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) && e.code.match(/^Digit([1-4])$/);
   if(dm){
     const idx=+dm[1]-1;
@@ -1788,14 +1811,18 @@ document.getElementById('bMeasure').onclick=()=>setMode(mode==='measure'?'select
 document.getElementById('bDel').onclick=delSel;
 document.getElementById('bFit').onclick=()=>{ fit(); draw(); };
 // resize() reads the canvas's on-screen size via getBoundingClientRect(); right at initial
-// page load (and occasionally right after a floor switch) the browser hasn't finished
-// laying out #main/#cv yet and this comes back 0x0 — fit() against a 0-size canvas computes
-// zoom=0, which draws nothing and looks like a blank/broken canvas even though every room
-// loaded correctly. Retry on the next frame until there's a real size to fit to.
+// page load the browser occasionally hasn't finished laying out #main/#cv yet and this comes
+// back 0x0 — fit() against a 0-size canvas computes zoom=0, which draws nothing and looks
+// like a blank/broken canvas even though every room loaded correctly. Rather than guessing
+// with a requestAnimationFrame poll (no way to know how many frames layout actually needs),
+// defer to the ResizeObserver already watching #cv below: the spec guarantees it fires once
+// with the real laid-out size as soon as layout completes, so that's the actual "ready"
+// signal — needsInitialFit just remembers we're still waiting on it.
+let needsInitialFit=false;
 function fitWhenReady(){
   resize();
-  if(VW===0 || VH===0){ requestAnimationFrame(fitWhenReady); return; }
-  fit(); draw();
+  if(VW===0 || VH===0){ needsInitialFit=true; return; }
+  needsInitialFit=false; fit(); draw();
 }
 // Switch the active floor: stash this floor's live rooms/openings/scale/north back into
 // its bucket, then load the target floor's — see the multi-floor state comment above for
@@ -1927,7 +1954,10 @@ document.getElementById('bNorth').value = northDeg;
 img.onload=()=>{ fitWhenReady(); };
 img.src=floorMeta[currentFloorIdx].image;
 window.addEventListener('resize', resize);
-new ResizeObserver(()=>resize()).observe(cv);   // keep buffer synced to display size
+// Keeps the canvas buffer synced to its display size; also the real fix for the initial
+// blank-canvas race above — its callback is guaranteed to fire once layout has actually
+// settled, so that's when a still-pending initial fit() finally runs, instead of polling.
+new ResizeObserver(()=>{ resize(); if(needsInitialFit && VW && VH) fitWhenReady(); }).observe(cv);
 backfillExhaust();
 backfillEquipLatent();
 backfillVentRates();
