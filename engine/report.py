@@ -504,12 +504,40 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
   .flag-warn {{ color: #b00020; }}
   .pagebreak {{ border: 0; border-top: 2px dashed #999; margin: 24px 0; }}
   .print-btn {{ font: 13px Georgia, serif; padding: 6px 14px; margin: 0 0 14px; cursor: pointer; }}
+  .print-footer {{ display: none; }}
   @media print {{
     .no-print {{ display: none; }}
     tr {{ page-break-inside: avoid; }}
     table {{ page-break-inside: avoid; }}
     img.report-img {{ max-width: 100%; height: auto; }}
     .section-break {{ page-break-before: always; break-before: page; }}
+    /* @page margin-box counters (counter(page)/counter(pages)) are included for print
+       engines that implement CSS Paged Media (e.g. WeasyPrint, Prince), but mainstream
+       browser print/print-to-PDF engines (Chrome, Firefox, Safari) do not render @page
+       margin-box content, so this has no visible effect there. The .print-footer element
+       below is the fallback that actually works via window.print() in a browser: a
+       position:fixed block repeats on every printed page in those engines, so it carries
+       the project name and report date as a running footer instead of a literal page count. */
+    @page {{
+      margin-bottom: 0.75in;
+      @bottom-center {{
+        content: "Page " counter(page) " of " counter(pages);
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: 10px;
+        color: #444;
+      }}
+    }}
+    .print-footer {{
+      display: block;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      text-align: center;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 10px;
+      color: #444;
+      border-top: 1px solid #ccc;
+      padding-top: 4px;
+    }}
   }}
 </style></head><body>
   <h1>Cooling &amp; Heating Load Results{(' — ' + project_name) if project_name else ''}</h1>
@@ -518,4 +546,5 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
   <p class="sub">{toc_html}</p>
   {sections_html}
   {sf_footnote}
+  <div class="print-footer">{project_name or 'Load Calc'}{(' · ' + generated) if generated else ''}</div>
 </body></html>"""
