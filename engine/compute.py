@@ -24,6 +24,13 @@ Approximations for arbitrary projects (documented, engineer-overridable):
     separately tracked); other floor types use area x U.
 The physics (solar / sol-air / CTS / fenestration / RTS) is the ASHRAE-verified
 core; these choices only set which coefficients feed it.
+
+compute_building() is a thin orchestrator over the phases below:
+  _resolve_scales_and_types      -> per-floor px/ft scale + type-library maps
+  _resolve_weather_and_safety_factors -> design conditions + safety-factor multipliers
+  _build_design_day_context      -> design-day dry-bulb series + day-of-year
+  _compute_room_loads            -> the per-room RTS/heating loop
+  _rollup_building                -> building/zone/floor subtotals + final result dict
 """
 from __future__ import annotations
 import math
@@ -74,16 +81,31 @@ def _type_map(lst):
     return {t["name"]: t for t in (lst or []) if isinstance(t, dict) and "name" in t}
 
 
-def compute_building(review, weather=None, month=8):
-    """review = parsed rooms_edited.json dict — rooms plus wall/roof/floor/glass/
-    door type libraries, safety_factors, and project_settings, everything
-    buildPayload() saves. weather = {cooling_db, daily_range, lat, lon,
-    std_meridian, tau_b, tau_d, indoor_db, indoor_grains, outdoor_grains}.
-    Returns a results dict."""
-    # Scale (px/ft) is now per-floor (different sheets in a multi-page plan set can be
-    # drawn at different scales) — buildPayload() stores it in `floors`, keyed by the
-    # `level` each room is tagged with. review.get("pxPerFt") is the pre-multi-floor
-    # fallback for an old saved file that predates the `floors` key entirely.
+def _resolve_sf(sf, key):
+    """One safety-factor value from the sf dict, falling back to DEFAULT_SAFETY_FACTORS[key]
+    only when the key is unset (None) — an explicit 0 (a real, deliberate override) must NOT
+    be silently bumped back up to the default just because 0 is falsy."""
+    v = sf.get(key)
+    return DEFAULT_SAFETY_FACTORS[key] if v is None else v
+
+
+def _opaque_load(db24, n, tau_b, tau_d, lat, lon, sm, area, u, azimuth, tilt, mass, lwr,
+                 t_indoor, rts_nonsolar):
+    """One opaque (wall/roof) surface's 24-hour RTS cooling-load series."""
+    if area <= 0 or not u:
+        return [0.0] * 24
+    cts = coeffs.cts_roof(mass) if tilt == 0 else coeffs.cts_wall(mass)
+    return opaque_cooling_load(db24, n, tau_b, tau_d, lat, lon, sm, azimuth,
+                               tilt, u, area, cts, rts_nonsolar,
+                               coeffs.RADIANT_FRACTION["wall"], 0.9, 3.0, lwr, t_indoor)
+
+
+def _resolve_scales_and_types(review):
+    """Per-floor px/ft scale (a multi-page plan set can be drawn at different scales per
+    sheet — buildPayload() stores it in `floors`, keyed by the `level` each room is tagged
+    with; review.get("pxPerFt") is the pre-multi-floor fallback for an old saved file that
+    predates the `floors` key entirely) + the wall/roof/glass/door/floor type libraries +
+    openings, from the review packet."""
     ppf_by_level = {f["level"]: f.get("pxPerFt", 18.0) for f in review.get("floors", [])}
     default_ppf = review.get("pxPerFt", 18.0)
     wtypes = _type_map(review.get("wall_types"))
@@ -92,7 +114,17 @@ def compute_building(review, weather=None, month=8):
     dtypes = _type_map(review.get("door_types"))
     ftypes = _type_map(review.get("floor_types"))
     openings = review.get("openings", [])
+    return ppf_by_level, default_ppf, wtypes, rtypes, gtypes, dtypes, ftypes, openings
 
+
+def _resolve_weather_and_safety_factors(review, weather, month):
+    """Design-condition inputs (resolved off the weather dict, with FL-representative
+    defaults) + the four safety-factor (design margin) multipliers — DM's own report has
+    explicit, separately-editable Room and Ventilation safety factors for both heating and
+    cooling; we had no equivalent knob at all. Room = envelope conduction/solar + internal
+    gains; Vent = ventilation/infiltration/exhaust-makeup outdoor air — kept separate
+    because DM applies them separately (a duct-leakage/OA-uncertainty margin is a different
+    concern from an envelope/occupancy-load margin)."""
     w = weather or {}
     cdb = w.get("cooling_db", 95.0)
     dr = w.get("daily_range", 18.0)
@@ -106,38 +138,31 @@ def compute_building(review, weather=None, month=8):
     w_in = w.get("indoor_grains", 65.0)
     to_htg = w.get("heating_db", DEFAULT_HEATING_DB)
 
-    # Safety factors (design margin) — DM's own report has explicit, separately-editable
-    # Room and Ventilation safety factors for both heating and cooling; we had no equivalent
-    # knob at all. Room = envelope conduction/solar + internal gains; Vent = ventilation/
-    # infiltration/exhaust-makeup outdoor air — kept separate because DM applies them
-    # separately (a duct-leakage/OA-uncertainty margin is a different concern from an
-    # envelope/occupancy-load margin). Falls back to DEFAULT_SAFETY_FACTORS (not 0) when a
-    # project has never set these — `or 0` would be the falsy-zero trap this codebase has
-    # been bitten by before: an engineer who explicitly sets e.g. clg_vent to 0 (a real,
-    # deliberate override, and in fact the recommended value) must not get silently bumped
-    # back up to a nonzero default just because 0 is falsy.
+    # Falls back to DEFAULT_SAFETY_FACTORS (not 0) when a project has never set these —
+    # see _resolve_sf's docstring for the falsy-zero trap this avoids.
     sf = review.get("safety_factors") or {}
+    sf_clg_room = 1.0 + _resolve_sf(sf, "clg_room") / 100.0
+    sf_clg_vent = 1.0 + _resolve_sf(sf, "clg_vent") / 100.0
+    sf_htg_room = 1.0 + _resolve_sf(sf, "htg_room") / 100.0
+    sf_htg_vent = 1.0 + _resolve_sf(sf, "htg_vent") / 100.0
 
-    def _sf(key):
-        v = sf.get(key)
-        return DEFAULT_SAFETY_FACTORS[key] if v is None else v
+    return (w, cdb, dr, lat, lon, sm, tau_b, tau_d, ti, w_out, w_in, to_htg,
+            sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent)
 
-    sf_clg_room = 1.0 + _sf("clg_room") / 100.0
-    sf_clg_vent = 1.0 + _sf("clg_vent") / 100.0
-    sf_htg_room = 1.0 + _sf("htg_room") / 100.0
-    sf_htg_vent = 1.0 + _sf("htg_vent") / 100.0
 
+def _build_design_day_context(cdb, dr, month):
+    """Design-day dry-bulb series + representative day-of-year for the given month."""
     db24 = design_day_db(cdb, dr)
     n = REP_N[month - 1]
+    return db24, n
 
-    def opaque(area, u, azimuth, tilt, mass, lwr, t_indoor, rts_nonsolar):
-        if area <= 0 or not u:
-            return [0.0] * 24
-        cts = coeffs.cts_roof(mass) if tilt == 0 else coeffs.cts_wall(mass)
-        return opaque_cooling_load(db24, n, tau_b, tau_d, lat, lon, sm, azimuth,
-                                   tilt, u, area, cts, rts_nonsolar,
-                                   coeffs.RADIANT_FRACTION["wall"], 0.9, 3.0, lwr, t_indoor)
 
+def _compute_room_loads(review, ppf_by_level, default_ppf, wtypes, rtypes, gtypes, dtypes,
+                        ftypes, openings, db24, n, tau_b, tau_d, lat, lon, sm, ti, to_htg,
+                        w_out, w_in, sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent):
+    """Per-room RTS-zone selection, envelope/window/door/internal-gains/ventilation loads,
+    safety-factor application, and room/zone/floor accumulation. Returns a dict of
+    everything _rollup_building needs to assemble the final result."""
     any_zoned = any(r.get("zone") for r in review.get("rooms", []))
     zone_acc = {}   # zone name -> {room24, latent, area, count} — only populated if any_zoned
     # Per-floor subtotals — the exact AHU-1/AHU-2 first-floor/second-floor pattern the
@@ -220,7 +245,8 @@ def compute_building(review, weather=None, month=8):
                                for o in rops if o.get("edge") == i)
             net = max(gross - opening_area, 0.0)
             az = SURFACE_AZIMUTH.get(card, 0.0)
-            load = opaque(net, u, az, 90.0, mass, 0.0, ti_room, rts_nonsolar)
+            load = _opaque_load(db24, n, tau_b, tau_d, lat, lon, sm, net, u, az, 90.0, mass,
+                               0.0, ti_room, rts_nonsolar)
             comps.append({"name": f"Wall {card} ({wt})", "peak": max(load), "series": load})
             room24 = [room24[k] + load[k] for k in range(24)]
             envelope.append({"category": "wall", "room": r.get("label", ""), "type": wt,
@@ -234,7 +260,8 @@ def compute_building(review, weather=None, month=8):
         roof = r.get("roof", "No roof load")
         if roof != "No roof load" and roof in rtypes and rtypes[roof].get("u"):
             mass = coeffs.mass_from_construction("roof", rtypes[roof].get("itype"), rtypes[roof]["u"])
-            load = opaque(area, rtypes[roof]["u"], 0.0, 0.0, mass, 7.0, ti_room, rts_nonsolar)
+            load = _opaque_load(db24, n, tau_b, tau_d, lat, lon, sm, area, rtypes[roof]["u"],
+                               0.0, 0.0, mass, 7.0, ti_room, rts_nonsolar)
             comps.append({"name": f"Roof ({roof})", "peak": max(load), "series": load})
             room24 = [room24[k] + load[k] for k in range(24)]
             envelope.append({"category": "roof", "room": r.get("label", ""), "type": roof,
@@ -487,6 +514,31 @@ def compute_building(review, weather=None, month=8):
             fl["count"] += 1
             fl["htg"] += room_htg
 
+    return {
+        "rooms_out": rooms_out, "bldg24": bldg24, "bldg_latent": bldg_latent, "bldg_htg": bldg_htg,
+        "any_zoned": any_zoned, "zone_acc": zone_acc,
+        "any_multifloor": any_multifloor, "floor_acc": floor_acc, "floor_labels": floor_labels,
+        "envelope": envelope, "air_rooms": air_rooms, "vent_rows": vent_rows,
+    }
+
+
+def _rollup_building(review, room_data, w, month, cdb, dr, lat, ti, to_htg, tau_b, tau_d,
+                     sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent):
+    """Building-level peak hour/sensible/total, zone/floor subtotals, air-balance rollup,
+    and the final result dict — everything downstream of the per-room loop."""
+    rooms_out = room_data["rooms_out"]
+    bldg24 = room_data["bldg24"]
+    bldg_latent = room_data["bldg_latent"]
+    bldg_htg = room_data["bldg_htg"]
+    any_zoned = room_data["any_zoned"]
+    zone_acc = room_data["zone_acc"]
+    any_multifloor = room_data["any_multifloor"]
+    floor_acc = room_data["floor_acc"]
+    floor_labels = room_data["floor_labels"]
+    envelope = room_data["envelope"]
+    air_rooms = room_data["air_rooms"]
+    vent_rows = room_data["vent_rows"]
+
     peak_hr = max(range(24), key=lambda k: bldg24[k])
     sens = bldg24[peak_hr]
     total = sens + bldg_latent
@@ -592,3 +644,28 @@ def compute_building(review, weather=None, month=8):
     if floors_out is not None:
         result["floors"] = floors_out
     return result
+
+
+def compute_building(review, weather=None, month=8):
+    """review = parsed rooms_edited.json dict — rooms plus wall/roof/floor/glass/
+    door type libraries, safety_factors, and project_settings, everything
+    buildPayload() saves. weather = {cooling_db, daily_range, lat, lon,
+    std_meridian, tau_b, tau_d, indoor_db, indoor_grains, outdoor_grains}.
+    Returns a results dict. A thin orchestrator — see module docstring for the
+    phase functions this calls in sequence."""
+    ppf_by_level, default_ppf, wtypes, rtypes, gtypes, dtypes, ftypes, openings = \
+        _resolve_scales_and_types(review)
+
+    (w, cdb, dr, lat, lon, sm, tau_b, tau_d, ti, w_out, w_in, to_htg,
+     sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent) = \
+        _resolve_weather_and_safety_factors(review, weather, month)
+
+    db24, n = _build_design_day_context(cdb, dr, month)
+
+    room_data = _compute_room_loads(
+        review, ppf_by_level, default_ppf, wtypes, rtypes, gtypes, dtypes, ftypes, openings,
+        db24, n, tau_b, tau_d, lat, lon, sm, ti, to_htg, w_out, w_in,
+        sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent)
+
+    return _rollup_building(review, room_data, w, month, cdb, dr, lat, ti, to_htg, tau_b, tau_d,
+                            sf_clg_room, sf_clg_vent, sf_htg_room, sf_htg_vent)
