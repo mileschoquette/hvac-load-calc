@@ -1,5 +1,5 @@
-"""Sanity check for duct auto-sizing — velocity-method arithmetic and a small hand-built
-network, not an ASHRAE table lookup (there's no time-series or solar involved here, same
+"""Sanity check for duct auto-sizing — equal-friction-method arithmetic and small hand-built
+networks, not an ASHRAE table lookup (there's no time-series or solar involved here, same
 reasoning as test_heating.py: nothing to validate against a workbook).
 
 Equipment-matching tests use a small SYNTHETIC fixture table (not the real
@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from engine import ducts
 from engine.ducts import (required_supply_cfm, round_duct_diameter, rect_duct_width, size_duct_network,
                            match_diffuser, match_air_handler, match_condensing_unit, duct_report_data,
-                           _round_up_5)
+                           friction_rate, diameter_for_friction, rect_equivalent_diameter, _round_up_5)
 
 
 def test_formulas():
@@ -28,18 +28,37 @@ def test_formulas():
     assert required_supply_cfm(24000, 0) == 0.0
     assert required_supply_cfm(None, 20) == 0.0
 
-    # 450 cfm at 900 fpm -> area=0.5sqft -> dia=sqrt(4*0.5/pi)*12=9.575in -> rounds up to 10
-    assert round_duct_diameter(450, 900) == 10
-    # no cfm / no velocity -> None, not an error
-    assert round_duct_diameter(0, 900) is None
-    assert round_duct_diameter(450, 0) is None
+    # Round-trip check against the reference doc's own numeric sanity check (equipment_data/
+    # duct_friction_reference.md section 1): 800 cfm, target fr=0.10 in.wg/100ft -> ideal
+    # diameter ~12.77in; feeding that back through the forward formula returns ~0.10
+    # in.wg/100ft (the design/report directions are consistent inverses of each other).
+    ideal = diameter_for_friction(800, 0.10)
+    assert abs(ideal - 12.77) < 0.02
+    assert abs(friction_rate(800, ideal) - 0.10) < 1e-6
+    # no cfm / no target rate -> None, not an error
+    assert diameter_for_friction(0, 0.10) is None
+    assert diameter_for_friction(800, 0) is None
+    assert friction_rate(0, 12.77) is None
+    assert friction_rate(800, 0) is None
 
-    # 1000 cfm at 900 fpm, 10in height -> area=1.1111sqft -> width=16.0in exactly -> 16
-    assert rect_duct_width(1000, 900, 10) == 16
-    # 1100 cfm, same velocity/height -> width=17.6in -> rounds up to the next 2" step, 18
-    assert rect_duct_width(1100, 900, 10) == 18
-    assert rect_duct_width(0, 900, 10) is None
-    assert rect_duct_width(1000, 900, 0) is None
+    # Rounding the ideal diameter UP to the nearest standard size (14in, the first standard
+    # size >= 12.77) can only LOWER the actual friction rate below the target — a bigger duct
+    # at the same cfm has less friction, never more.
+    assert round_duct_diameter(800, 0.10) == 14
+    assert friction_rate(800, 14) < 0.10
+    assert round_duct_diameter(0, 0.10) is None
+    assert round_duct_diameter(800, 0) is None
+
+    # Rectangular equivalent-diameter round trip (ASHRAE Ch.32 Eq. 25): the width solved by
+    # bisection for a fixed height reproduces the SAME target equivalent diameter when fed
+    # back through the forward equivalent-diameter formula.
+    target_de = diameter_for_friction(1000, 0.10)
+    width = ducts._solve_rect_width_for_de(target_de, 10)
+    assert abs(rect_equivalent_diameter(width, 10) - target_de) < 1e-3
+
+    assert rect_duct_width(1000, 0.10, 10) % 2 == 0
+    assert rect_duct_width(0, 0.10, 10) is None
+    assert rect_duct_width(1000, 0.10, 0) is None
     print("PASS  duct sizing formulas")
 
 
@@ -51,6 +70,7 @@ def test_network():
     # fixture here) only comes in discrete sizes, so the final terminal/trunk cfm is that
     # theoretical split PRORATED to whatever real unit covers it, then rounded up to 5.
     review = {
+        "floors": [{"level": 1, "pxPerFt": 12.0}],
         "rooms": [
             {"id": 1, "points": [[0, 0], [100, 0], [100, 200], [0, 200]]},
             {"id": 2, "points": [[200, 0], [300, 0], [300, 200], [200, 200]]},
@@ -103,6 +123,78 @@ def test_network():
     print("PASS  duct network CFM propagation + sizing")
 
 
+def test_pressure_network():
+    # One AH root (run 1, a straight rect trunk -> gets the AH-entrance fitting only), one
+    # branch (run 2, teeing off run 1's middle at [60,0] -> gets the branch-tee fitting, PLUS
+    # a 90-degree bend at [60,120] -> gets one elbow loss), and a straight return root (run 3,
+    # also off the same AH -> AH-entrance fitting only, no tee/elbow). Floor pxPerFt=12.0 so
+    # every segment is a clean number of feet (120px = 10ft, matching the reference doc's
+    # "pick a clean round pxPerFt" guidance).
+    review = {
+        "floors": [{"level": 1, "pxPerFt": 12.0}],
+        "rooms": [{"id": 1, "points": [[-500, -500], [500, -500], [500, 500], [-500, 500]]}],
+        "duct_runs": [
+            {"id": 1, "system": "supply", "form": "auto", "points": [[0, 0], [120, 0]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 2, "system": "supply", "form": "auto", "points": [[60, 0], [60, 120], [180, 120]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 3, "system": "return", "form": "auto", "points": [[0, 0], [0, -120]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+        ],
+        "duct_terminals": [
+            {"id": 10, "kind": "ceiling_supply", "point": [180, 120], "level": 1, "auto": True, "cfm": None},
+            {"id": 11, "kind": "ceiling_return", "point": [0, -120], "level": 1, "auto": True, "cfm": None},
+        ],
+        "duct_equipment": [{"id": 20, "kind": "AH", "point": [0, 0], "level": 1}],
+    }
+    # 2,200 Btu/h at the default 20F supply delta-T -> exactly 100.0 cfm — and the fixture AH
+    # below is rated for exactly 100.0 cfm too, so AH-match proration is a no-op (target ==
+    # theoretical, no rescaling), keeping every downstream number a clean, hand-checkable value.
+    result = {"rooms": [{"id": 1, "sensible_btuh": 2200.0}]}
+
+    ducts._csv_cache["air_handlers.csv"] = [
+        {"manufacturer": "Acme", "model": "AH1", "rated_supply_cfm": 100.0, "rated_esp_in_wg": None}]
+    try:
+        out = size_duct_network(review, result)
+    finally:
+        del ducts._csv_cache["air_handlers.csv"]
+
+    run1, run2, run3 = out["duct_runs"][1], out["duct_runs"][2], out["duct_runs"][3]
+    assert run1["cfm"] == 100.0 and run2["cfm"] == 100.0 and run3["cfm"] == 100.0
+    # run1/run3 are plain (no tee at either endpoint) -> default "rect"; run2's own endpoint
+    # lands mid-span on run1 -> "flex" (round cross-section, sized by diameter).
+    assert run1["width_in"] and run3["width_in"]
+    assert run2["diameter_in"]
+
+    # run1: straight rect trunk off the AH root -> AH-entrance fitting (C=0.50) only, no elbow
+    # (dead straight, no interior vertex at all).
+    v1 = run1["velocity_fpm"]
+    vp1 = (v1 / 4005) ** 2
+    expected_dp1 = run1["friction_rate_actual"] / 100.0 * 10.0 + 0.50 * vp1
+    assert abs(run1["pressure_drop_in_wg"] - expected_dp1) < 1e-4
+
+    # run2: branch-tee fitting (ratio = its own V / run1's V, interpolated off
+    # BRANCH_TEE_C_TABLE) PLUS one elbow (its own >30-degree bend) — both referenced to run2's
+    # OWN velocity pressure, round C since it's round/flex cross-section, length 20ft (10+10).
+    v2 = run2["velocity_fpm"]
+    vp2 = (v2 / 4005) ** 2
+    tee_c = ducts._branch_tee_c(v2 / v1)
+    expected_dp2 = (run2["friction_rate_actual"] / 100.0 * 20.0 + tee_c * vp2 + ducts.ELBOW_C_ROUND * vp2)
+    assert abs(run2["pressure_drop_in_wg"] - expected_dp2) < 1e-4
+
+    # run3: straight rect return root off the same AH -> AH-entrance fitting only.
+    v3 = run3["velocity_fpm"]
+    vp3 = (v3 / 4005) ** 2
+    expected_dp3 = run3["friction_rate_actual"] / 100.0 * 10.0 + 0.50 * vp3
+    assert abs(run3["pressure_drop_in_wg"] - expected_dp3) < 1e-4
+
+    # static_pressure_in_wg = supply side's one worst-case path (run1 -> run2, the only
+    # supply leaf) + return side's one worst-case path (run3 alone, the only return leaf).
+    expected_static = expected_dp1 + expected_dp2 + expected_dp3
+    assert abs(out["duct_equipment"][20]["static_pressure_in_wg"] - expected_static) < 1e-4
+    print("PASS  duct pressure-drop network (AH entrance + branch tee + elbow + static pressure)")
+
+
 # Synthetic diffuser fixture — 3 non-overlapping ceiling_supply bands (50-150, 151-300,
 # 301-500), nothing in sidewall_return. Deliberately NOT the real diffuser_schedule.csv,
 # whose exact bands are being cleaned up (de-overlapped/capped) elsewhere.
@@ -114,10 +206,12 @@ _FIXTURE_DIFFUSERS = [
     {"manufacturer": "Acme", "model_line": "CC", "terminal_kind": "ceiling_supply",
      "neck_or_face_size": "10in", "cfm_min": 301.0, "cfm_max": 500.0},
 ]
+# rated_esp_in_wg included per air_handlers.csv's real schema (blank/None for most rows, a
+# real value for a few) — only T3 carries one here, matching that "most rows have none" shape.
 _FIXTURE_AHS = [
-    {"manufacturer": "Trane", "model": "T1", "rated_supply_cfm": 1000.0},
-    {"manufacturer": "Trane", "model": "T2", "rated_supply_cfm": 2000.0},
-    {"manufacturer": "Trane", "model": "T3", "rated_supply_cfm": 3000.0},
+    {"manufacturer": "Trane", "model": "T1", "rated_supply_cfm": 1000.0, "rated_esp_in_wg": None},
+    {"manufacturer": "Trane", "model": "T2", "rated_supply_cfm": 2000.0, "rated_esp_in_wg": None},
+    {"manufacturer": "Trane", "model": "T3", "rated_supply_cfm": 3000.0, "rated_esp_in_wg": 0.5},
 ]
 _FIXTURE_CUS = [
     {"manufacturer": "Carrier", "model": "C1", "nominal_tons": 2.0},
@@ -148,15 +242,19 @@ def test_match_diffuser():
 def test_match_air_handler():
     ducts._csv_cache["air_handlers.csv"] = _FIXTURE_AHS
     try:
-        # 1500 cfm rounds up to the smallest covering model, T2 (2000 cfm)
+        # 1500 cfm rounds up to the smallest covering model, T2 (2000 cfm, no rated ESP)
         assert match_air_handler(1500) == {"manufacturer": "Trane", "model": "T2",
-                                            "rated_supply_cfm": 2000.0, "clamped": None}
-        # above every model's rating -> largest available, flagged
+                                            "rated_supply_cfm": 2000.0, "rated_esp_in_wg": None,
+                                            "clamped": None}
+        # above every model's rating -> largest available, flagged (T3, which DOES carry a
+        # rated ESP — proves match_air_handler passes it through when present, too)
         m_high = match_air_handler(5000)
         assert m_high["model"] == "T3" and m_high["clamped"] == "above_max"
+        assert m_high["rated_esp_in_wg"] == 0.5
         # well below the smallest model -> that smallest model still covers it, no clamp
         assert match_air_handler(100) == {"manufacturer": "Trane", "model": "T1",
-                                           "rated_supply_cfm": 1000.0, "clamped": None}
+                                           "rated_supply_cfm": 1000.0, "rated_esp_in_wg": None,
+                                           "clamped": None}
     finally:
         del ducts._csv_cache["air_handlers.csv"]
     # empty table -> None
@@ -221,6 +319,10 @@ def test_duct_report_data_matching():
         # AH sees the same ~1090.9 cfm -> rounds up to T2 (2000 cfm)
         assert equip["AH-1"]["matched_manufacturer"] == "Trane"
         assert equip["AH-1"]["matched_model"] == "T2"
+        # No floor scale in this fixture -> no real-length calc -> no static pressure -> no
+        # rated-ESP comparison possible, regardless of T2's own (blank) rated ESP.
+        assert equip["AH-1"]["static_pressure_in_wg"] is None
+        assert equip["AH-1"]["esp_exceeded"] is None
         # CU tons come from the matching zone (3.0), not the building (5.0) -> C2 (4 tons)
         assert equip["CU-1"]["matched_manufacturer"] == "Carrier"
         assert equip["CU-1"]["matched_model"] == "C2"
@@ -232,6 +334,54 @@ def test_duct_report_data_matching():
         del ducts._csv_cache["air_handlers.csv"]
         del ducts._csv_cache["condensing_units.csv"]
     print("PASS  duct_report_data equipment matching (synthetic fixture)")
+
+
+def test_esp_exceeded_flag():
+    # Reuse test_pressure_network's hand-built network purely to get a known, non-trivial
+    # static_pressure_in_wg out of the engine, then flex `rated_esp_in_wg` above and below
+    # that number to prove `esp_exceeded` flips correctly — and is left None when the matched
+    # unit has no rated ESP at all (true for most real air_handlers.csv rows, per that file's
+    # own notes: most catalog units size their fan/drive package per job rather than
+    # publishing one nameplate ESP, so this is a correct "unknown", not a bug).
+    review = {
+        "floors": [{"level": 1, "pxPerFt": 12.0}],
+        "rooms": [{"id": 1, "points": [[-500, -500], [500, -500], [500, 500], [-500, 500]]}],
+        "duct_runs": [
+            {"id": 1, "system": "supply", "form": "auto", "points": [[0, 0], [120, 0]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 2, "system": "supply", "form": "auto", "points": [[60, 0], [60, 120], [180, 120]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+            {"id": 3, "system": "return", "form": "auto", "points": [[0, 0], [0, -120]],
+             "level": 1, "auto": True, "width_in": None, "height_in": None, "diameter_in": None, "cfm": None},
+        ],
+        "duct_terminals": [
+            {"id": 10, "kind": "ceiling_supply", "point": [180, 120], "level": 1, "auto": True, "cfm": None},
+            {"id": 11, "kind": "ceiling_return", "point": [0, -120], "level": 1, "auto": True, "cfm": None},
+        ],
+        "duct_equipment": [{"id": 20, "kind": "AH", "point": [0, 0], "level": 1, "label": "AH-1"}],
+    }
+    result = {"rooms": [{"id": 1, "label": "Room 1", "area_sqft": 100.0, "sensible_btuh": 2200.0}]}
+
+    ducts._csv_cache["air_handlers.csv"] = [
+        {"manufacturer": "Acme", "model": "AH1", "rated_supply_cfm": 100.0, "rated_esp_in_wg": None}]
+    try:
+        sized = size_duct_network(review, result)
+    finally:
+        del ducts._csv_cache["air_handlers.csv"]
+    static = sized["duct_equipment"][20]["static_pressure_in_wg"]
+    assert static is not None and static > 0
+
+    for rated_esp, expected in [(static * 0.5, True), (static * 2.0, False), (None, None)]:
+        ducts._csv_cache["air_handlers.csv"] = [
+            {"manufacturer": "Acme", "model": "AH1", "rated_supply_cfm": 100.0, "rated_esp_in_wg": rated_esp}]
+        try:
+            out = duct_report_data(review, result)
+        finally:
+            del ducts._csv_cache["air_handlers.csv"]
+        row = next(e for e in out["equipment"] if e["kind"] == "AH")
+        assert row["static_pressure_in_wg"] == static
+        assert row["esp_exceeded"] is expected
+    print("PASS  ESP-exceeded flag (exceeded / within range / no rated ESP)")
 
 
 def test_supply_return_proration():
@@ -412,10 +562,12 @@ def test_capacity_override_and_exact_room_sums():
 def main():
     test_formulas()
     test_network()
+    test_pressure_network()
     test_match_diffuser()
     test_match_air_handler()
     test_match_condensing_unit()
     test_duct_report_data_matching()
+    test_esp_exceeded_flag()
     test_supply_return_proration()
     test_capacity_override_and_exact_room_sums()
 

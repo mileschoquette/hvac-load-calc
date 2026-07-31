@@ -230,13 +230,26 @@ def _suggested_model(row, model_key="matched_model"):
     return f"{manufacturer} {row.get('matched_model_line')} {row.get('matched_size')}"
 
 
+def _static_pressure_cell(e):
+    """Formats an AH row's computed static pressure, bold-red-flagged (same convention as
+    `_project_info`'s UNVERIFIED-weather-source flag) when it exceeds the matched unit's
+    rated ESP — "—" when no static pressure could be computed at all (e.g. missing floor
+    scale for real-length calc, or no ductwork drawn downstream of this AH)."""
+    sp = e.get("static_pressure_in_wg")
+    if sp is None:
+        return "—"
+    text = f"{sp:.2f}\" wg"
+    return f"<b style='color:#b00020'>⚠ {text} (exceeds rated ESP)</b>" if e.get("esp_exceeded") else text
+
+
 def _duct_schedule(ducts):
     out = ""
     if ducts.get("equipment"):
-        cols = ["Tag", "Kind", "Supply CFM", "Return CFM", "Suggested Model"]
+        cols = ["Tag", "Kind", "Supply CFM", "Return CFM", "Static Pressure", "Suggested Model"]
         rows = "".join("<tr>" + _td(e["tag"], False) + _td(e["kind"], False)
                         + _td(f"{e['supply_cfm']:,.0f}" if e.get("supply_cfm") is not None else "—")
                         + _td(f"{e['return_cfm']:,.0f}" if e.get("return_cfm") is not None else "—")
+                        + _td(_static_pressure_cell(e))
                         + _td(_suggested_model(e), False) + "</tr>"
                         for e in ducts["equipment"])
         out += _table("Air Handling Equipment", len(cols), col_headers=cols, rows=rows)

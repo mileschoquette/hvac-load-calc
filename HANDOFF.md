@@ -77,7 +77,7 @@ rendered as a `.vbs` (for DM) **and** `loadcalc_input.json` (for us).
 | `room.py` | orchestrator (composes stages incl. shaded-window Table 32/33 method) | end-to-end wall 304.6 vs 304.7; **golden room 4,122.2 vs 4,121.6 (0.01%)** |
 | `coeffs.py` | CTS/RTS coefficient library | extracted from workbook; roof CTS + roof/equipment radiant fractions corrected against golden room |
 | `heating.py` | steady-state heating loss (conduction + air, no RTS/solar/gains) | `tests/test_heating.py` (arithmetic, no ASHRAE table — heating has no time-series to validate) |
-| `ducts.py` | duct auto-sizing — velocity method + network CFM propagation | `tests/test_ducts.py` (arithmetic + a hand-built AH/trunk/branch network — no ASHRAE table involved) |
+| `ducts.py` | duct auto-sizing — equal-friction method + network CFM propagation + fitting-loss static pressure | `tests/test_ducts.py` (arithmetic + hand-built AH/trunk/branch networks — no ASHRAE table involved) |
 | `compute.py` | building compute (from review packet) — cooling + heating | smoke-tested, cooling calibrated per item #2, heating hand-verified component-by-component |
 | `report.py` | results HTML — styled after Design Master's HVAC Loads report | — |
 
@@ -319,6 +319,106 @@ Deps: `pymupdf shapely networkx matplotlib numpy xlrd pandas` (+ `esprima` for t
     state) to 1,200/1,200 after Auto-Size, then typing `1000` into the new field and
     re-running Auto-Size rescaled its two diffusers from 900/100 (previously 1080/120) to
     still sum to exactly 1,000.
+
+    **Phase K — equal-friction sizing + fitting-loss static pressure + AH ESP matching
+    (2026-07-31) — ✅ DONE.** Per the user: calculate static pressure drop through the
+    ductwork and use it in sizing, not just report a CFM/size. Replaced the fixed-velocity
+    sizing method entirely with the industry-standard **equal-friction** method (matches
+    Design Master, the CAD tool this project's source drawings come from): one target
+    friction rate (`design.friction_rate_in_wg_per_100ft`, default 0.10 in.wg/100ft, project
+    setting `duct_friction_rate`) drives every duct's size instead of a fixed velocity;
+    velocity (`velocity_fpm`) becomes a computed OUTPUT for the engineer to sanity-check,
+    not a sizing input. New Huebscher-equation formulas in `engine/ducts.py`
+    (`friction_rate`/`diameter_for_friction` forward/inverse, `rect_equivalent_diameter` +
+    bisection for rectangular width) — all cited from ASHRAE Fundamentals Ch.21/32 in the
+    new `equipment_data/duct_friction_reference.md` (built by a dedicated research
+    subagent, independently numerically verified: 800 cfm @ target 0.10 → ~12.77in,
+    round-trips back to 0.10; cross-checked separately against known ductulator convention,
+    1000 cfm @ 900 fpm → 14.3in → 0.086 in.wg/100ft, right in the normal commercial range).
+    New fitting-loss model, also cited (ASHRAE Duct Fitting Database): every run gets
+    exactly ONE "connection" fitting at its own upstream end — AH entrance (C=0.50) if it's
+    a root run, else a branch tee (`find_tee_point`, C interpolated 0.32–0.85 by
+    branch/main velocity ratio) if it tees off another run, else a transition/reducer
+    (C=0.20) if its final size differs from its parent's, else nothing — PLUS one elbow
+    loss (C=0.22 round / 0.15 rect) for every interior vertex in its own drawn points that
+    bends more than `ELBOW_ANGLE_THRESHOLD_DEG` (30°, a deliberate simplification for
+    inferring real fittings from 2D centerlines). Real run length now comes from each
+    floor's own `pxPerFt` (`review["floors"]`, the same scale already used for room square
+    footage) instead of being unavailable to `ducts.py` at all. Per-AH
+    `static_pressure_in_wg` = the worst root-to-leaf path ("index run") on the supply side
+    plus the worst path on the return side, reusing the existing BFS parent/children
+    structure rather than a new traversal.
+
+    Also added ESP (external static pressure) matching: `equipment_data/air_handlers.csv`
+    gained a `rated_esp_in_wg` column, researched by 5 parallel subagents (one per
+    manufacturer spec sheet, split so no one agent re-fetches a PDF another already has).
+    Result was a genuine finding, not just missing data: **20 of 21 units have no single
+    nameplate ESP at all** — commercial packaged RTUs either ship with a field-selected
+    drive/sheave package sized to the job's actual duct static, or (Trane Precedent) hold a
+    duct-static SETPOINT via a VFD controller rather than being rated at one point. Only
+    Rheem's 3 models yielded even a derived (not spec-sheet-stated) number, flagged
+    low-confidence in the CSV's own notes. `duct_report_data`'s `esp_exceeded` flag
+    (`engine/report.py`'s new Static Pressure column, bold-red when true) only ever fires
+    where a real rated ESP exists — `None`/no-flag for the rest is correct, not a gap, per
+    that research. **Documented scope boundary:** diffuser/coil/filter pressure drop are
+    NOT modeled (no pressure-drop data in `diffuser_schedule.csv`, and equipment-internal
+    drops are a manufacturer spec) — the computed number is duct-and-fitting-only, same
+    "known gap, not silently wrong" pattern as item #12's air-balance report below.
+
+    Built via one research subagent (formulas/coefficients) + 5 parallel ESP-lookup workers
+    + 2 parallel build subagents (engine: `engine/ducts.py`/`engine/report.py`/
+    `tests/test_ducts.py`; rendering: `export_review.py` only), run directly in the main
+    checkout rather than isolated worktrees since the two build subagents' files are
+    disjoint and Phase 0's uncommitted CSV/reference-doc output needed to be visible to
+    them. `loadcalc.py`'s `_duct_design()` (the one shared touchpoint between the two
+    subagents) was wired by hand at merge time. Verified: full `tests/test_*.py` green
+    (golden_room/golden_building untouched, 0.01–0.02%); ran end-to-end against the real
+    `rooms_edited.json` (AH-1: 0.1354 in.wg static pressure, matched to Carrier 48TC*A04,
+    no `esp_exceeded` since that model has no rated ESP); hand-recomputed BOTH a real run's
+    pressure drop (run 6: straight friction + AH-entrance + two elbows = 0.05393 in.wg,
+    matched exactly) and the full AH-1 critical-path sum (supply worst-path 0.0744 +
+    return worst-path 0.0611 = 0.1354, matched exactly) independently from the documented
+    formulas, not just by trusting the subagents' own test suite.
+
+    **Phase L — drags carry attachments; Shift detaches; bulk-attach diffusers
+    (2026-07-31) — ✅ DONE.** Connectivity in the duct tool has always been purely
+    geometric (`findTeePoint`/`nearestDuctPoint` just check point coincidence within
+    1.5px/12-screen-px tolerance) and none of the three drag handlers (`ductrun` whole-body,
+    `ductvertex` single-dot, `ductpoint` terminal/equipment) knew about anything else
+    touching the thing being dragged — any drag silently broke whatever it used to touch.
+    Per the user: dragging a run or a diffuser should carry along whatever's currently
+    attached to it, no matter how far; an explicit gesture should detach on purpose.
+    New `runAttachments(run)` (everything currently coincident with any point along a
+    run — terminals, equipment, other runs' endpoints, broader than `findTeePoint`'s
+    mid-span-only check, matching `engine/ducts.py`'s `_runs_connect`) and `vertexUnder(pt)`
+    (the inverse — does a point sit on an existing run vertex). Whole-run body drags now
+    translate every attached entry by the same (dx,dy) each frame; terminal/equipment point
+    drags now also move whichever run vertex they're sitting on to track them. Holding
+    **Shift** at drag start skips this entirely for that drag, so the dragged item moves
+    alone and — since attachment is purely geometric — immediately detaches in both
+    directions (nothing follows it, and if it was itself touching something upstream, that
+    breaks too). Deliberately caps at one level deep: dragging a trunk moves an attached
+    branch's near end, but the branch isn't rigidly translating, so nothing attached to
+    THAT branch follows — by design, not a gap. Also new: multi-select diffusers (now
+    Ctrl/Cmd-click, not Shift-click — a subagent-caught conflict, since Shift-click on a
+    terminal would otherwise swallow the shift-drag-to-detach gesture for that one entity
+    type; Ctrl/Cmd is also the more conventional toggle-multi-select modifier anyway) then
+    click a target run to auto-draw a straight stub from the nearest point on that run to
+    each selected diffuser (`bulkAttachTo`), skipping and toast-reporting any supply/return
+    system mismatch. New stubs use `form:'auto'`, so `findTeePoint`/`effectiveForm` classify
+    them as real flex branches with zero extra engine-side work. `export_review.py` only —
+    no engine/report/test changes, since coincidence-based attachment means the Python side
+    needs nothing new as long as drags preserve or break coincidence exactly. Built via one
+    implementation subagent working directly in the main checkout (uncommitted Phase K work
+    already in this same file); verified myself afterward with real dispatched
+    `MouseEvent`s (mousedown/mousemove/mouseup) against the actual page functions, not
+    screenshot-pixel clicking (unreliable on this small embedded canvas) or reimplemented
+    logic: trunk drag carries a branch's near end + terminal but doesn't cascade to a
+    grandchild; branch-body drag carries its own terminal while detaching from the trunk it
+    was teeing off; Shift+drag on a run/terminal/equipment each correctly detach; Ctrl-click
+    three diffusers (two supply, one return) + click a supply run correctly created two
+    stubs, correctly classified `flex` via `findTeePoint`, and correctly skipped/toasted the
+    return one ("Attached 2 diffusers. 1 skipped..."). No console errors at any step.
 12. **Air balance / building pressurization report — ✅ DONE.** New report section: checks that the building is never net-negative pressure (outdoor humid air being drawn in through every crack instead of kept out — a real moisture-intrusion risk in FL, not just a comfort issue). The insight that made this tractable: at the BUILDING level, only designed airflows that actually cross the envelope matter — ventilation OA + exhaust-makeup OA (in) vs. total exhaust (out, the *full* exhaust CFM regardless of how much is made up — the fan pulls all of it). Transfer air (the non-makeup portion of exhaust) is a wash at the building level since it moves *within* the building rather than crossing the envelope, so it doesn't need to be modeled as an explicit path between rooms — no new data beyond what item #9 already added. `compute_building` returns a new `air_balance` dict: building totals (Ventilation OA / Exhaust Makeup OA / Total OA In / Exhaust Out / **Net CFM**, negative = under-pressured), the same breakdown per zone (reuses the existing zone grouping), and per room. Infiltration is deliberately excluded from the balance — it's a *symptom* of imbalance, not a reliable designed air source. A room can and often should show net-negative on its own (e.g. a kitchen counting on transfer air from dining) — that's flagged as expected/informational, not a problem; only the BUILDING total is the actual pass/fail check. Verified with a kitchen (30% dedicated makeup, -196 CFM alone) + dining (300 CFM ventilation) pair: building nets to +104 CFM (correctly not flagged) because dining's ventilation air covers both its own need and the kitchen's transfer requirement; a second case with too little dining ventilation (50 CFM) correctly nets to -146 CFM and flags **⚠ NEGATIVE**. **Known gap, disclosed in the report itself:** only exhaust the engineer actually enters counts — a fume hood, dryer vent, or other exhaust source not entered as `exh_cfm` on some room won't be caught by this check.
 
 ## 6. Key decisions & gotchas (don't re-learn these)

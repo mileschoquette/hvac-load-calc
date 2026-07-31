@@ -167,8 +167,7 @@ def _duct_design(ps):
     the documented defaults), not the None-safe safety-factor-style helper, since none of
     these have a legitimate deliberate zero the way a safety factor does."""
     return {"supply_delta_t": _f(ps, "duct_supply_delta_t"),
-            "trunk_velocity_fpm": _f(ps, "duct_trunk_velocity_fpm"),
-            "branch_velocity_fpm": _f(ps, "duct_branch_velocity_fpm"),
+            "friction_rate_in_wg_per_100ft": _f(ps, "duct_friction_rate"),
             "trunk_height_in": _f(ps, "duct_trunk_height_in")}
 
 
