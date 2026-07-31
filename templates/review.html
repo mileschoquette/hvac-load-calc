@@ -26,8 +26,9 @@
   * { box-sizing: border-box; }
   html,body { margin:0; height:100%; font-family: -apple-system, system-ui, sans-serif; background:var(--surface); color:var(--ink); }
   #app { display:flex; flex-direction:column; height:100vh; }
-  #bar { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--bar-bg); color:var(--bar-text); }
+  #bar { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--bar-bg); color:var(--bar-text); flex-wrap:wrap; row-gap:8px; }
   #bar b { font-size:15px; margin-right:10px; }
+  #bar .bar-sep { width:1px; height:22px; background:var(--btn-bg-hover); flex:0 0 auto; margin:0 2px; }
   #bar .logo { height:26px; margin-right:10px; display:block; }
   #bar button { background:var(--btn-bg); color:var(--bar-text); border:0; padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
   #bar button:hover { background:var(--btn-bg-hover); }
@@ -69,11 +70,11 @@
   .chip .sw { width:14px; height:14px; border-radius:4px; flex:0 0 auto; }
   .chip .nm { flex:1; }
   .chip .u { color:var(--ink-muted); font-variant-numeric:tabular-nums; }
-  .chip .edit { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .edit { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:12px; }
   .chip .edit:hover { color:var(--accent); }
-  .chip .del { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .del { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:12px; }
   .chip .del:hover { color:var(--danger); }
-  .chip .copy { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:11px; }
+  .chip .copy { color:var(--ink-faint); cursor:pointer; padding:0 2px; font-size:12px; }
   .chip .copy:hover { color:var(--success); }
   .con-add { background:var(--surface-subtle); border:1px dashed var(--ink-faint); color:var(--ink-soft); padding:7px; width:100%; border-radius:8px; cursor:pointer; font-size:12.5px; margin-bottom:14px; }
   .type-form { border:1px solid var(--accent); border-radius:8px; padding:8px 10px; margin-bottom:14px; background:var(--surface-tint); }
@@ -82,21 +83,21 @@
   .type-form .tf-save { flex:1; background:var(--accent); color:#fff; border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
   .type-form .tf-cancel { flex:1; background:var(--border); color:var(--ink-soft); border:0; padding:8px; border-radius:6px; cursor:pointer; font-size:12.5px; }
   .loadgrid { display:grid; grid-template-columns:1fr 92px; gap:5px 8px; align-items:center; margin:10px 0; }
-  .loadgrid label { margin:0; font-size:11.5px; color:var(--ink-soft); }
+  .loadgrid label { margin:0; font-size:12.5px; color:var(--ink-soft); }
   .loadgrid input { padding:5px 6px; }
   #bar .north { font-size:12px; color:var(--ink-faint); }
   #bar .north input { width:52px; padding:4px; border:0; border-radius:5px; margin-left:2px; background:var(--surface); color:var(--ink); }
   #bar .north select { padding:4px; border:0; border-radius:5px; margin-left:2px; background:var(--surface); color:var(--ink); }
-  .walls-list { margin:10px 0; font-size:11.5px; }
+  .walls-list { margin:10px 0; font-size:12.5px; }
   .walls-list .wl-h { color:var(--ink-muted); margin-bottom:3px; }
-  .walls-list .wl-row { display:grid; grid-template-columns:36px 1fr 52px; gap:6px; padding:2px 0; border-top:1px solid var(--border-soft); }
+  .walls-list .wl-row { display:grid; grid-template-columns:36px 1fr 58px; gap:6px; padding:2px 0; border-top:1px solid var(--border-soft); }
   .filter-box { width:100%; padding:6px 8px; margin:4px 0 8px; border:1px solid var(--input-border); border-radius:6px; font-size:12.5px; background:var(--surface); color:var(--ink); }
-  .legend { font-size:11px; color:var(--ink-muted); padding:8px 12px; border-top:1px solid var(--border); }
+  .legend { font-size:12px; color:var(--ink-muted); padding:8px 12px; border-top:1px solid var(--border); }
   .legend summary { cursor:pointer; color:var(--ink-soft); font-weight:600; }
   .legend .lg-row { display:flex; align-items:center; gap:6px; margin:4px 0 0 2px; }
   .legend .lg-sw { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
-  #kbdHint { font-size:11px; color:var(--ink-muted); padding:6px 12px; border-top:1px solid var(--border); }
-  #kbdHint kbd { background:var(--surface-alt); border:1px solid var(--border); border-radius:3px; padding:0 4px; font-size:10px; }
+  #kbdHint { font-size:12px; color:var(--ink-muted); padding:6px 12px; border-top:1px solid var(--border); }
+  #kbdHint kbd { background:var(--surface-alt); border:1px solid var(--border); border-radius:3px; padding:0 4px; font-size:11px; }
   #kbdHint a { color:var(--accent); cursor:pointer; }
   .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--bar-bg); color:var(--bar-text);
     padding:10px 16px; border-radius:8px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25); z-index:50;
@@ -108,15 +109,19 @@
   <div id="bar">
     <!--__LOGO__-->
     <span class="north" title="Switch which floor's plan you're viewing/editing. Each floor keeps its own rooms, drawing scale, and North setting.">Floor <select id="bFloor"></select></span>
+    <span class="bar-sep"></span>
     <button id="bAdd" title="Add a new room">+ Add Room</button>
     <button id="bDel" title="Delete the selected room">Delete</button>
     <button id="bFit" title="Fit the whole plan to the visible canvas">Fit</button>
     <button id="bMeasure" title="Measure a distance on the plan">📏 Measure</button>
+    <span class="bar-sep"></span>
     <span class="north">North° <input id="bNorth" type="number" step="1" value="0"></span>
     <span class="north" title="Recalibrates THIS FLOOR's drawing scale so its rooms drawn so far add up to this — enter this floor's actual total square footage, not a guess.">Total ft² <input id="bTotalSqft" type="number" step="1" placeholder="e.g. 12500"></span>
     <button id="bMatchSqft" title="Recalibrate this floor's scale to match the Total ft² entered above">Match</button>
+    <span class="bar-sep"></span>
     <button id="bSave" title="Save the current rooms/ducts/settings to rooms_edited.json">Save JSON</button>
     <button id="bRunCalc" class="primary" title="Run the load calculation and generate the report">▶ Run Load Calc</button>
+    <span class="bar-sep"></span>
     <span class="sp"></span>
     <span class="ruler-stat" id="rulerStat"></span>
     <span class="stat" id="stat"></span>
@@ -503,7 +508,7 @@ function drawDuctLabel(sp, label){
   let best=0, bestLen=-1;
   for(let i=0;i<sp.length-1;i++){ const l=Math.hypot(sp[i+1][0]-sp[i][0],sp[i+1][1]-sp[i][1]); if(l>bestLen){bestLen=l;best=i;} }
   const a=sp[best], b=sp[best+1], mx=(a[0]+b[0])/2, my=(a[1]+b[1])/2;
-  ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=3; ctx.strokeText(label, mx, my);
   ctx.fillStyle='#111827'; ctx.fillText(label, mx, my);
   ctx.textBaseline='alphabetic';
@@ -656,7 +661,7 @@ function drawTerminalIcon(t, on, pending){
     ctx.stroke();
   }
   const label=[t.size,t.cfm!=null?t.cfm+' cfm':''].filter(Boolean).join(' · ');
-  if(label){ ctx.fillStyle='#111827'; ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.fillText(label, s[0], s[1]+sz+11); }
+  if(label){ ctx.fillStyle='#111827'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(label, s[0], s[1]+sz+11); }
 }
 function drawEquipmentIcon(eq, on){
   // Square = air handler / dehumidifier, circle = condensing unit — matches the reference.
@@ -664,13 +669,13 @@ function drawEquipmentIcon(eq, on){
   ctx.strokeStyle = on ? '#111827' : '#5b21b6'; ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=1.5;
   if(eq.kind==='CU'){ ctx.beginPath(); ctx.arc(s[0],s[1],sz,0,7); ctx.fill(); ctx.stroke(); }
   else { ctx.fillRect(s[0]-sz,s[1]-sz,sz*2,sz*2); ctx.strokeRect(s[0]-sz,s[1]-sz,sz*2,sz*2); }
-  ctx.fillStyle='#111827'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center';
+  ctx.fillStyle='#111827'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
   let ly=s[1]+sz+11;
   ctx.fillText(eq.label||eq.kind, s[0], ly);
   if(eq.kind==='AH'){
-    if(eq.supply_cfm!=null){ ly+=11; ctx.fillText('Supply: '+eq.supply_cfm+' cfm', s[0], ly); }
-    if(eq.return_cfm!=null){ ly+=11; ctx.fillText('Return: '+eq.return_cfm+' cfm', s[0], ly); }
-    if(eq.static_pressure_in_wg!=null){ ly+=11; ctx.fillText('ESP: '+eq.static_pressure_in_wg+' in.wg', s[0], ly); }
+    if(eq.supply_cfm!=null){ ly+=12; ctx.fillText('Supply: '+eq.supply_cfm+' cfm', s[0], ly); }
+    if(eq.return_cfm!=null){ ly+=12; ctx.fillText('Return: '+eq.return_cfm+' cfm', s[0], ly); }
+    if(eq.static_pressure_in_wg!=null){ ly+=12; ctx.fillText('ESP: '+eq.static_pressure_in_wg+' in.wg', s[0], ly); }
   }
 }
 function nearestEdge(wp){ let best=null; rooms.forEach(r=>{ const P=r.points; for(let i=0;i<P.length;i++){ const d=segDist(wp,P[i],P[(i+1)%P.length]); if(!best||d<best.dist) best={room:r,i:i,dist:d}; } }); return best; }
@@ -843,15 +848,15 @@ function draw(printMode){
       const hov=(paintCat==='wall' && hoverEdge && hoverEdge.room===r && hoverEdge.i===i);
       ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);
       ctx.strokeStyle = hov?'#ea580c':(wc||(r.id===selected?'#1d4ed8':'#10b981')); ctx.lineWidth = hov?6:(wc?3.5:1.2); ctx.stroke();
-      if(wc){ ctx.fillStyle='#1e3a8a'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center'; ctx.fillText(edgeOrient(r,i), (a[0]+b[0])/2, (a[1]+b[1])/2-2); } }
+      if(wc){ ctx.fillStyle='#1e3a8a'; ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.fillText(edgeOrient(r,i), (a[0]+b[0])/2, (a[1]+b[1])/2-2); } }
     const c=cen(sp); ctx.textAlign='center';
     ctx.fillStyle='#064e3b'; ctx.font='bold 12px sans-serif'; ctx.fillText(r.label, c[0], c[1]-12);
-    ctx.font='11px sans-serif'; ctx.fillText(area(r.points).toFixed(0)+' ft²', c[0], c[1]+1);
-    let yy=c[1]+13;
-    if(r.zone){ ctx.fillStyle='#7c3aed'; ctx.font='bold 10px sans-serif'; ctx.fillText('◆ '+r.zone, c[0], yy); yy+=11; }
-    if(r.type){ ctx.fillStyle='#475569'; ctx.font='10px sans-serif'; ctx.fillText(r.type, c[0], yy); yy+=11; }
-    if(rc){ ctx.fillStyle='#7c2d12'; ctx.font='10px sans-serif'; ctx.fillText('▲ '+r.roof, c[0], yy); yy+=11; }
-    if(r.floor && r.floor!=='No floor load'){ ctx.fillStyle='#374151'; ctx.font='10px sans-serif'; ctx.fillText('▼ '+r.floor, c[0], yy); }
+    ctx.font='12px sans-serif'; ctx.fillText(area(r.points).toFixed(0)+' ft²', c[0], c[1]+1);
+    let yy=c[1]+14;
+    if(r.zone){ ctx.fillStyle='#7c3aed'; ctx.font='bold 11px sans-serif'; ctx.fillText('◆ '+r.zone, c[0], yy); yy+=12; }
+    if(r.type){ ctx.fillStyle='#475569'; ctx.font='11px sans-serif'; ctx.fillText(r.type, c[0], yy); yy+=12; }
+    if(rc){ ctx.fillStyle='#7c2d12'; ctx.font='11px sans-serif'; ctx.fillText('▲ '+r.roof, c[0], yy); yy+=12; }
+    if(r.floor && r.floor!=='No floor load'){ ctx.fillStyle='#374151'; ctx.font='11px sans-serif'; ctx.fillText('▼ '+r.floor, c[0], yy); }
   });
   // window/door instances sitting on their walls
   if(!printMode) openings.forEach(o=>{ const r=rooms.find(x=>x.id===o.rid); if(!r) return; const P=r.points, a=P[o.edge], b=P[(o.edge+1)%P.length];
@@ -920,7 +925,7 @@ function draw(printMode){
   const R=26,rx=48,ry=56,nr=northDeg*Math.PI/180,nv=[Math.sin(nr),-Math.cos(nr)];
   ctx.beginPath(); ctx.arc(rx,ry,R,0,7); ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fill(); ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1; ctx.stroke();
   ctx.beginPath(); ctx.moveTo(rx-nv[0]*R*0.6,ry-nv[1]*R*0.6); ctx.lineTo(rx+nv[0]*R*0.8,ry+nv[1]*R*0.8); ctx.strokeStyle='#ef4444'; ctx.lineWidth=2.5; ctx.stroke();
-  ctx.fillStyle='#ef4444'; ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.fillText('N', rx+nv[0]*(R+8), ry+nv[1]*(R+8)+3);
+  ctx.fillStyle='#ef4444'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center'; ctx.fillText('N', rx+nv[0]*(R+8), ry+nv[1]*(R+8)+3);
   document.getElementById('stat').textContent = rooms.length+' rooms · '+total().toFixed(0)+' ft² total';
 }
 
@@ -1033,7 +1038,7 @@ function ductsPanel(){
     if(kind==='run'){
       const ef=effectiveForm(item), isRect=(ef==='rect');
       h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(DUCT_RUN_KINDS,item.system)+' — '+ductLabel(DUCT_FORM_OPTS,ef)+(item.form==='auto'?' (auto)':' (forced)')
-        +'<br><span style="font-size:11px">Edit it like a room: drag a dot to move it, alt/right-click to delete it (min 2 points), click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it into two independently-editable pieces. Straighten (below) pivots at whichever dot is solid blue — the one you last clicked or dragged.</span></div><div class="loadgrid">';
+        +'<br><span style="font-size:12px">Edit it like a room: drag a dot to move it, alt/right-click to delete it (min 2 points), click an orange + to add one, drag the body to move the whole run. Shift-click an interior dot to split it into two independently-editable pieces. Straighten (below) pivots at whichever dot is solid blue — the one you last clicked or dragged.</span></div><div class="loadgrid">';
       h+='<label>Form</label><select class="df" data-f="form">'+DUCT_FORM_OPTS.map(([k,l])=>'<option value="'+k+'"'+(item.form===k?' selected':'')+'>'+l+'</option>').join('')+'</select>';
       h+='<label>Auto-size this</label><input type="checkbox" class="df" data-f="auto" style="width:auto;justify-self:start"'+(item.auto!==false?' checked':'')+'>';
       h+='<label>CFM</label><input type="number" step="any" class="df" data-f="cfm" value="'+(item.cfm!=null?item.cfm:'')+'">';
@@ -1044,7 +1049,7 @@ function ductsPanel(){
         h+='<label>Diameter (in)</label><input type="number" step="any" class="df" data-f="diameter_in" value="'+(item.diameter_in!=null?item.diameter_in:'')+'">';
       }
       h+=zoneField(item.zone)+'</div>';
-      h+='<span style="font-size:11px">'
+      h+='<span style="font-size:12px">'
         +(item.friction_rate_actual!=null?'Friction: '+item.friction_rate_actual+' in.wg/100ft':'Friction: —')+' · '
         +(item.velocity_fpm!=null?'Velocity: '+item.velocity_fpm+' fpm':'Velocity: —')+' · '
         +(item.pressure_drop_in_wg!=null?'ΔP: '+item.pressure_drop_in_wg+' in.wg':'ΔP: —')+'</span>';
@@ -1052,7 +1057,7 @@ function ductsPanel(){
         const isInterior=selDuctVertex>0 && selDuctVertex<item.points.length-1;
         const crossRun=!isInterior && connectionAt(item, item.points[selDuctVertex]);
         const canStraighten=isInterior || !!crossRun;
-        h+='<div style="font-size:11px;color:var(--ink-muted);margin:10px 0 4px">Straighten (DM-style Next/Previous) — snaps '
+        h+='<div style="font-size:12px;color:var(--ink-muted);margin:10px 0 4px">Straighten (DM-style Next/Previous) — snaps '
           +(isInterior ? 'the segment on either side of the dot you last clicked/dragged'
                        : (crossRun ? 'this run\'s segment at that end-dot, against the OTHER run it connects to,'
                                    : 'the segment at that end-dot — but it isn\'t touching another run, so there\'s nothing to straighten against'))
@@ -1068,7 +1073,7 @@ function ductsPanel(){
       h+=zoneField(item.zone)+'</div>';
     } else {
       h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(EQUIPMENT_KINDS,item.kind)
-        +(item.kind==='AH' ? '<br><span style="font-size:11px">Supply: '+(item.supply_cfm!=null?item.supply_cfm+' cfm':'—')+' · Return: '+(item.return_cfm!=null?item.return_cfm+' cfm':'—')+' · ESP: '+(item.static_pressure_in_wg!=null?item.static_pressure_in_wg+' in.wg':'—')+'</span>' : '')
+        +(item.kind==='AH' ? '<br><span style="font-size:12px">Supply: '+(item.supply_cfm!=null?item.supply_cfm+' cfm':'—')+' · Return: '+(item.return_cfm!=null?item.return_cfm+' cfm':'—')+' · ESP: '+(item.static_pressure_in_wg!=null?item.static_pressure_in_wg+' in.wg':'—')+'</span>' : '')
         +'</div><div class="loadgrid">';
       h+='<label>Label</label><input class="df" data-f="label" value="'+(item.label!=null?String(item.label).replace(/"/g,'&quot;'):'')+'">';
       if(item.kind==='AH'){
@@ -1308,7 +1313,7 @@ function roomsPanel(){
       h+='<label>Overhang height above window (ft)</label><input type="number" step="0.1" min="0" id="oOhSep" value="'+(op.overhang_sep||0)+'">';
       h+='<label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer"><input type="checkbox" id="oShaded" style="width:auto"'+(op.shaded?' checked':'')+'> Interior shade (blinds)</label>';
       if(op.shaded){
-        h+='<div style="font-size:11.5px;color:var(--ink-muted);margin:2px 0 6px">Indoor Attenuation Coefficient — how much of the solar gain the shade blocks (1.0 = none, lower = more shading)</div>';
+        h+='<div style="font-size:12.5px;color:var(--ink-muted);margin:2px 0 6px">Indoor Attenuation Coefficient — how much of the solar gain the shade blocks (1.0 = none, lower = more shading)</div>';
         h+='<label>IAC at 0° (beam, normal)</label><input type="number" step="0.01" min="0" max="1" id="oIac0" value="'+(op.iac0!=null?op.iac0:0.7)+'">';
         h+='<label>IAC at 60° (beam, grazing)</label><input type="number" step="0.01" min="0" max="1" id="oIac60" value="'+(op.iac60!=null?op.iac60:0.6)+'">';
         h+='<label>IAC diffuse</label><input type="number" step="0.01" min="0" max="1" id="oIacDiff" value="'+(op.iac_diffuse!=null?op.iac_diffuse:0.7)+'">';
@@ -1325,9 +1330,9 @@ function roomsPanel(){
     h+='<label>Floor</label><select id="fFloor">'+FLOOR_TYPES.map(t=>'<option'+(t.name===sel.floor?' selected':'')+'>'+t.name+'</option>').join('')+'</select>';
     h+='<label>Ceiling height (ft)</label><input type="number" step="0.1" id="fCeil" placeholder="e.g. 9" value="'+(sel.ceiling_ft!==''&&sel.ceiling_ft!=null?sel.ceiling_ft:'')+'">';
     h+='<label>Floor-to-floor height (ft)</label><input type="number" step="0.1" id="fFtoF" placeholder="defaults to ceiling ht." value="'+(sel.floor_to_floor_ft!==''&&sel.floor_to_floor_ft!=null?sel.floor_to_floor_ft:'')+'">';
-    h+='<div style="font-size:11px;color:var(--ink-muted);margin-top:-6px">Exterior walls run to the structure above, not just the dropped ceiling — set this if there\'s a plenum (floor-to-floor taller than the ceiling height).</div>';
+    h+='<div style="font-size:12px;color:var(--ink-muted);margin-top:-6px">Exterior walls run to the structure above, not just the dropped ceiling — set this if there\'s a plenum (floor-to-floor taller than the ceiling height).</div>';
     h+='<label>Floor covering</label><select id="fCarpet"><option value="1"'+(sel.carpet!==false?' selected':'')+'>Carpet</option><option value="0"'+(sel.carpet===false?' selected':'')+'>No carpet (tile / vinyl / concrete)</option></select>';
-    h+='<div style="font-size:11px;color:var(--ink-muted);margin-top:-6px">Feeds the RTS zone (ASHRAE Ch.18 Table 19/20) — changes how quickly a heat gain shows up as cooling load, not its size.</div>';
+    h+='<div style="font-size:12px;color:var(--ink-muted);margin-top:-6px">Feeds the RTS zone (ASHRAE Ch.18 Table 19/20) — changes how quickly a heat gain shows up as cooling load, not its size.</div>';
     h+='<div class="area">'+area(sel.points).toFixed(0)+' ft²</div>';
     const L=sel.loads||{}; h+='<div class="loadgrid">';
     LOAD_FIELDS.forEach(f=>{ h+='<label>'+f[1]+'</label><input type="number" step="any" class="lf" data-k="'+f[0]+'" value="'+(L[f[0]]!=null?L[f[0]]:'')+'">'; });
