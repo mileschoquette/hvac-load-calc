@@ -105,15 +105,15 @@
   <div id="bar">
     <!--__LOGO__-->
     <span class="north" title="Switch which floor's plan you're viewing/editing. Each floor keeps its own rooms, drawing scale, and North setting.">Floor <select id="bFloor"></select></span>
-    <button id="bAdd">+ Add Room</button>
-    <button id="bDel">Delete</button>
-    <button id="bFit">Fit</button>
-    <button id="bMeasure">📏 Measure</button>
+    <button id="bAdd" title="Add a new room">+ Add Room</button>
+    <button id="bDel" title="Delete the selected room">Delete</button>
+    <button id="bFit" title="Fit the whole plan to the visible canvas">Fit</button>
+    <button id="bMeasure" title="Measure a distance on the plan">📏 Measure</button>
     <span class="north">North° <input id="bNorth" type="number" step="1" value="0"></span>
     <span class="north" title="Recalibrates THIS FLOOR's drawing scale so its rooms drawn so far add up to this — enter this floor's actual total square footage, not a guess.">Total ft² <input id="bTotalSqft" type="number" step="1" placeholder="e.g. 12500"></span>
-    <button id="bMatchSqft">Match</button>
-    <button id="bSave">Save JSON</button>
-    <button id="bRunCalc" class="primary">▶ Run Load Calc</button>
+    <button id="bMatchSqft" title="Recalibrate this floor's scale to match the Total ft² entered above">Match</button>
+    <button id="bSave" title="Save the current rooms/ducts/settings to rooms_edited.json">Save JSON</button>
+    <button id="bRunCalc" class="primary" title="Run the load calculation and generate the report">▶ Run Load Calc</button>
     <span class="sp"></span>
     <span class="ruler-stat" id="rulerStat"></span>
     <span class="stat" id="stat"></span>
@@ -287,10 +287,10 @@ let hoverDuctSnap=null, ductPreviewPt=null;
 // not part of the actual duct drawing. Persisted like the theme (a display preference).
 let ductViewMode = localStorage.getItem('loadcalc-ductview')==='client' ? 'client' : 'engineer';
 // Inline type add/edit form state — {cat, name} of the type being edited (name=null means
-// "adding a new one in this cat"), or null when no form is open. Replaces the old one-
-// field-at-a-time prompt() chain for wall/roof/floor/window/door types with a single form
-// showing every field at once (rtype/zone still use the simple name-only prompt below,
-// since they have nothing else to edit here).
+// "adding a new one in this cat"), or null when no form is open. Replaces the old native
+// prompt()/one-field-at-a-time chain for every type category (wall/roof/floor/window/door
+// get every field at once; rtype/zone get a single-field version of the same form, since
+// they have nothing else to edit here).
 let editingType = null;
 // Project-wide design-margin knobs (DM's own report has these; we had none). Room = envelope +
 // internal gains, Vent = ventilation/infiltration/exhaust-makeup outdoor air — kept separate
@@ -1046,8 +1046,8 @@ function ductsPanel(){
                        : (crossRun ? 'this run\'s segment at that end-dot, against the OTHER run it connects to,'
                                    : 'the segment at that end-dot — but it isn\'t touching another run, so there\'s nothing to straighten against'))
           +' to whichever is closer to its current angle: running straight on, or turning a clean 90° corner, off the other segment.</div>';
-        h+='<div class="tf-row"><button class="con-add" id="bStraightenPrev"'+(canStraighten?'':' disabled')+'>⌐ Previous [</button>'
-          +'<button class="con-add" id="bStraightenNext"'+(canStraighten?'':' disabled')+'>Next ] ⌐</button></div>';
+        h+='<div class="tf-row"><button class="con-add" id="bStraightenPrev" title="Snap the previous segment to a clean angle (straight or 90°) off the pivot dot"'+(canStraighten?'':' disabled')+'>⌐ Previous [</button>'
+          +'<button class="con-add" id="bStraightenNext" title="Snap the next segment to a clean angle (straight or 90°) off the pivot dot"'+(canStraighten?'':' disabled')+'>Next ] ⌐</button></div>';
       }
     } else if(kind==='terminal'){
       h+='<div style="font-size:12px;color:var(--ink-muted);margin-bottom:8px">'+ductLabel(TERMINAL_KINDS,item.kind)+'</div><div class="loadgrid">';
@@ -1074,7 +1074,7 @@ function ductsPanel(){
     DUCT_RUN_KINDS.forEach(([key,label])=>{ const on=(paintCat==='ductrun'&&activeType===key);
       h+='<div class="chip'+(on?' on':'')+'" data-dcat="ductrun" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
     h+='</div>';
-    if(paintCat==='ductrun') h+='<button class="con-add" id="bDrawDuct">'+(mode==='draw_duct'?'Drawing… double-click to finish':'✏️ Draw Run')+'</button>';
+    if(paintCat==='ductrun') h+='<button class="con-add" id="bDrawDuct" title="'+(mode==='draw_duct'?'Double-click, or press Enter/Esc, to finish this run':'Draw a new duct run — click to place points')+'">'+(mode==='draw_duct'?'Drawing… double-click to finish':'✏️ Draw Run')+'</button>';
     h+='<h3 style="margin-top:14px">Terminals</h3><div class="types">';
     TERMINAL_KINDS.forEach(([key,label])=>{ const on=(paintCat==='terminal'&&activeType===key);
       h+='<div class="chip'+(on?' on':'')+'" data-dcat="terminal" data-dkey="'+key+'"><span class="nm">'+label+'</span></div>'; });
@@ -1400,25 +1400,31 @@ function wireRooms(){
 }
 
 function conPanel(){
-  let h='<div class="selblock"><h3>Types &amp; assignment</h3><div style="font-size:12px;color:var(--ink-muted)">Pick a type, then click on the plan: <b>walls</b> (edges) for a wall type, <b>rooms</b> for a roof / floor / room / zone type, or a <b>wall</b> to drop a window / door. ＋ adds a type; 📋 duplicates one (a quick start for a similar variant); ✎ edits every field on it at once; ✕ deletes one. Esc stops.</div></div>';
+  let h='<div class="selblock"><h3>Types &amp; assignment</h3><div style="font-size:12px;color:var(--ink-muted)">Pick a type, then click on the plan: <b>walls</b> (edges) for a wall type, <b>rooms</b> for a roof / floor / room / zone type, or a <b>wall</b> to drop a window / door. + adds a type; 📋 duplicates one (a quick start for a similar variant); ✎ edits every field on it at once; ✕ deletes one. Esc stops.</div></div>';
   h+='<div class="listblock">'+typeSection('wall','Wall types')+typeSection('window','Window types')+typeSection('door','Door types')+typeSection('roof','Roof types')+typeSection('floor','Floor types')+typeSection('rtype','Room types')+typeSection('zone','Zones (for per-system block loads)')+'</div>';
   return h;
 }
 // Field specs for the inline add/edit form — every wall/roof/floor/window/door field shown
 // and editable at once, replacing the old one-field-at-a-time prompt() chain. rtype/zone
-// keep the simple name-only prompt below (nothing else on them to edit here).
+// only have a name to edit, so they get a single-field version of the same form (see
+// typeFieldForm/applyTypeSave) instead of a native prompt().
 const TYPE_FIELD_SPECS = {
   wall:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox'],['color','Custom plan color','color']],
   roof:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark (higher solar absorptance)','checkbox'],['color','Custom plan color','color']],
   floor: [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['dark','Dark','checkbox'],['color','Custom plan color','color']],
   window:[['name','Name','text'],['u','U-value','number'],['shgc','SHGC (0–1)','number'],['width','Width (ft)','number'],['height','Height (ft)','number'],['color','Custom plan color','color']],
   door:  [['name','Name','text'],['u','U-value (Btu/h·ft²·°F), 0 = none','number'],['width','Width (ft)','number'],['height','Height (ft)','number'],['color','Custom plan color','color']],
+  rtype: [['name','Room type name','text']],
+  zone:  [['name','Zone name (e.g. "AHU-1")','text']],
 };
 const TYPE_FIELD_DEFAULTS = {
   wall:{u:0,dark:false}, roof:{u:0,dark:false}, floor:{u:0,dark:false},
   window:{u:0.5,shgc:0.4,width:3,height:4}, door:{u:0,width:3,height:6.83,dark:false},
 };
 function typeFieldForm(cat, cur, autoColor){
+  // rtype/zone libraries are plain arrays of name strings, not {name,...} objects like the
+  // other categories — wrap so the rest of this form can treat `cur` uniformly.
+  if(typeof cur==='string') cur={name:cur};
   const specs=TYPE_FIELD_SPECS[cat], defaults=TYPE_FIELD_DEFAULTS[cat]||{};
   let h='<div class="loadgrid">';
   specs.forEach(([key,label,kind])=>{
@@ -1474,48 +1480,19 @@ function typeSection(cat,title){
     const on=(paintCat===cat&&activeType===name);
     h+='<div class="chip'+(on?' on':'')+'" data-cat="'+cat+'" data-name="'+name.replace(/"/g,'&quot;')+'">'
       +'<span class="sw" style="background:'+col+'"></span><span class="nm">'+name+'</span><span class="u">'+info+'</span>'
-      +(isNo?'':'<span class="copy" data-cat="'+cat+'" data-copy="'+name.replace(/"/g,'&quot;')+'">📋</span>'
-             +'<span class="edit" data-cat="'+cat+'" data-edit="'+name.replace(/"/g,'&quot;')+'">✎</span>'
-             +'<span class="del" data-cat="'+cat+'" data-del="'+name.replace(/"/g,'&quot;')+'">✕</span>')+'</div>'; });
+      +(isNo?'':'<span class="copy" data-cat="'+cat+'" data-copy="'+name.replace(/"/g,'&quot;')+'" title="Duplicate">📋</span>'
+             +'<span class="edit" data-cat="'+cat+'" data-edit="'+name.replace(/"/g,'&quot;')+'" title="Rename this type">✎</span>'
+             +'<span class="del" data-cat="'+cat+'" data-del="'+name.replace(/"/g,'&quot;')+'" title="Delete">✕</span>')+'</div>'; });
   h+='</div>';
   if(editingType && editingType.cat===cat && editingType.name===null) h+='<div class="type-form">'+typeFieldForm(cat, null, '#888888')+'</div>';
-  else h+='<button class="con-add" data-cat="'+cat+'">＋ Add type</button>';
+  else h+='<button class="con-add" data-cat="'+cat+'" title="Add a new type">+ Add type</button>';
   return h;
 }
-function promptTypeFields(cat, cur){
-  // rtype/zone only — a single name field, so a plain prompt is still simplest. Every
-  // other category (wall/roof/floor/window/door) uses typeFieldForm/readTypeForm instead.
-  if(cat==='rtype'){ const nm=prompt('Room type name:', cur||''); return nm ? {name:nm} : null; }
-  const nm=prompt('Zone name (e.g. "AHU-1"):', cur||''); return nm ? {name:nm} : null;
-}
-function editType(cat, oldName){   // rtype/zone rename only (see promptTypeFields)
-  const f = promptTypeFields(cat, oldName);
-  if(!f) return;
-  if(cat==='rtype'){
-    const i=ROOM_TYPE_LIB.indexOf(oldName); if(i>=0) ROOM_TYPE_LIB[i]=f.name;
-    if(f.name!==oldName){
-      rooms.forEach(r=>{ if(r.type===oldName) r.type=f.name; });
-      if(RT_REC[oldName]){ RT_REC[f.name]=Object.assign({},RT_REC[oldName],{name:f.name}); delete RT_REC[oldName]; }
-    }
-  } else {
-    const i=ZONE_LIB.indexOf(oldName); if(i>=0) ZONE_LIB[i]=f.name;
-    if(f.name!==oldName) rooms.forEach(r=>{ if(r.zone===oldName) r.zone=f.name; });
-  }
-  if(activeType===oldName) activeType=f.name;
-  renderSide(); draw();
-}
 function startEditType(cat, name){
-  if(cat==='rtype'||cat==='zone'){ editType(cat, name); return; }
   editingType={cat, name};
   renderSide();
 }
 function startAddType(cat){
-  if(cat==='rtype'||cat==='zone'){
-    const f=promptTypeFields(cat, null); if(!f) return;
-    if(cat==='rtype'){ if(!ROOM_TYPE_LIB.includes(f.name)) ROOM_TYPE_LIB.push(f.name); }
-    else if(!ZONE_LIB.includes(f.name)) ZONE_LIB.push(f.name);
-    renderSide(); return;
-  }
   editingType={cat, name:null};
   renderSide();
 }
@@ -1523,6 +1500,29 @@ function cancelTypeEdit(){ editingType=null; renderSide(); }
 function applyTypeSave(cat, oldName){   // oldName === '' means "adding new"
   const f = readTypeForm(cat);
   if(!f.name){ showToast('Name is required.', true); return; }
+  if(cat==='rtype'||cat==='zone'){
+    // rtype/zone libraries are plain name-string arrays (see libOf), not {name,...} objects
+    // like the other categories, so renaming/adding is index-based rather than object-based.
+    const lib = cat==='rtype' ? ROOM_TYPE_LIB : ZONE_LIB;
+    if(!oldName){
+      if(lib.includes(f.name)){ showToast('A '+cat+' type named "'+f.name+'" already exists.', true); return; }
+      lib.push(f.name);
+    } else {
+      const i=lib.indexOf(oldName); if(i>=0) lib[i]=f.name;
+      if(f.name!==oldName){
+        if(cat==='rtype'){
+          rooms.forEach(r=>{ if(r.type===oldName) r.type=f.name; });
+          if(RT_REC[oldName]){ RT_REC[f.name]=Object.assign({},RT_REC[oldName],{name:f.name}); delete RT_REC[oldName]; }
+        } else {
+          rooms.forEach(r=>{ if(r.zone===oldName) r.zone=f.name; });
+        }
+        if(activeType===oldName) activeType=f.name;
+      }
+    }
+    editingType=null;
+    renderSide(); draw();
+    return;
+  }
   if(!oldName){
     const lib=libOf(cat);
     if(lib.some(t=>t.name===f.name)){ showToast('A '+cat+' type named "'+f.name+'" already exists.', true); return; }
