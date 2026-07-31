@@ -69,7 +69,7 @@ def _project_info(design, project_name, generated, building):
     clg_pctl = design.get("cooling_percentile") or "1%"
     htg_pctl = design.get("heating_percentile") or "99.6%"
     source = design.get("weather_source", "unknown")
-    source_html = (f"<b style='color:#b00020'>⚠ {source}</b>" if source.startswith("UNVERIFIED")
+    source_html = (f"<b class='flag-warn'>⚠ {source}</b>" if source.startswith("UNVERIFIED")
                    else source)
     elev_row = ""
     if design.get("elevation_ft") is not None:
@@ -79,8 +79,8 @@ def _project_info(design, project_name, generated, building):
     lon_warning_row = ""
     if design.get("lon_warning"):
         lon_warning_row = (
-            f"<tr><th class='project' style='background:#fdecea;color:#b00020'>⚠ Longitude Sign Error:</th>"
-            f"<td class='otherData' colspan='3' style='background:#fdecea;color:#b00020'>"
+            f"<tr><th class='project flag-warn' style='background:#fdecea'>⚠ Longitude Sign Error:</th>"
+            f"<td class='otherData flag-warn' colspan='3' style='background:#fdecea'>"
             f"<b>{design['lon_warning']}</b></td></tr>")
     rows = "".join([
         f"<tr><th class='project'>Project Name:</th><td class='otherData' colspan='3'>{project_name or '—'}</td></tr>",
@@ -247,7 +247,7 @@ def _static_pressure_cell(e):
     if sp is None:
         return "—"
     text = f"{sp:.2f}\" wg"
-    return f"<b style='color:#b00020'>⚠ {text} (exceeds rated ESP)</b>" if e.get("esp_exceeded") else text
+    return f"<b class='flag-warn'>⚠ {text} (exceeds rated ESP)</b>" if e.get("esp_exceeded") else text
 
 
 def _duct_schedule(ducts):
@@ -278,7 +278,8 @@ def _duct_schedule(ducts):
 def _air_balance(ab):
     net = ab["net_cfm"]
     status = ("✓ Positive — building is not under-pressured" if net >= 0 else
-              "⚠ NEGATIVE — more air is being exhausted than brought in as outdoor air")
+              "<span class='flag-warn'>⚠ NEGATIVE — more air is being exhausted than brought "
+              "in as outdoor air</span>")
     summary_rows = (
         "<tr><th class='project'>Ventilation OA In:</th>" + _td(f"{ab['vent_cfm']:,.0f} CFM") +
         "<th class='project'>Exhaust Out:</th>" + _td(f"{ab['exh_cfm']:,.0f} CFM") + "</tr>"
@@ -422,6 +423,7 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
 
     sections = [
         ("Project Information", _project_info(d, project_name, generated, b)),
+        ("Load Total Summary — Room (Building)", _load_summary("Load Total Summary — Room (Building)", building_row)),
         ("Roof Types", _types_table("Roof Types", types.get("roof", []), "roof")),
         ("Roofs", _usage_table("Roofs", envelope, "roof")),
         ("Wall Types", _types_table("Wall Types", types.get("wall", []), "wall")),
@@ -435,7 +437,6 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
         ("Cooling Load Details — Room", _cooling_detail(rooms, d["month"])),
         ("Heating Load Details — Room", _heating_detail(rooms, d["heating_db"])),
         ("Supply Air Requirements", supply_air_section),
-        ("Load Total Summary — Room (Building)", _load_summary("Load Total Summary — Room (Building)", building_row)),
         ("Load Total Summary — Zones", zones_section),
         ("Load Total Summary — Floors", floors_section),
         ("Air Balance — Building Pressurization", air_balance_section),
@@ -457,6 +458,7 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
     # (TOC label, present?, section title used to derive the matching #anchor)
     toc_items = [
         ("Project Information", True, "Project Information"),
+        ("Load Total Summary — Building", True, "Load Total Summary — Room (Building)"),
         ("Roof Types", True, "Roof Types"),
         ("Roofs", True, "Roofs"),
         ("Wall Types", True, "Wall Types"),
@@ -470,7 +472,6 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
         ("Cooling Load Details", True, "Cooling Load Details — Room"),
         ("Heating Load Details", True, "Heating Load Details — Room"),
         ("Supply Air Requirements", bool(supply_air_section), "Supply Air Requirements"),
-        ("Load Total Summary — Building", True, "Load Total Summary — Room (Building)"),
         ("Load Total Summary — Zones", bool(zones_section), "Load Total Summary — Zones"),
         ("Load Total Summary — Floors", bool(floors_section), "Load Total Summary — Floors"),
         ("Air Balance", bool(air_balance_section), "Air Balance — Building Pressurization"),
@@ -500,6 +501,7 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
   td.otherData {{ border: 1px solid #ccc; padding: 3px 8px; }}
   .right {{ text-align: right; font-variant-numeric: tabular-nums; }}
   .note {{ color: #444; font-size: 11.5px; margin: -12px 0 20px; font-style: italic; }}
+  .flag-warn {{ color: #b00020; }}
   .pagebreak {{ border: 0; border-top: 2px dashed #999; margin: 24px 0; }}
   .print-btn {{ font: 13px Georgia, serif; padding: 6px 14px; margin: 0 0 14px; cursor: pointer; }}
   @media print {{
