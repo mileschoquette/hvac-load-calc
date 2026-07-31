@@ -9,7 +9,7 @@
   .drop{border:2px dashed #cbd5e1;border-radius:10px;padding:22px;text-align:center;cursor:pointer;margin-bottom:16px;transition:border-color .15s,background .15s}
   .drop:hover,.drop.drag{border-color:#2563eb;background:#eff6ff}
   .drop .ttl{font-weight:600;margin-bottom:4px}
-  .drop .hint{font-size:12.5px;color:#6b7280}
+  .hint{font-size:12.5px;color:#6b7280}
   .drop .file{margin-top:8px;font-size:13px;color:#111827;font-weight:500}
   label.fld{display:block;font-size:12.5px;color:#374151;margin:14px 0 4px}
   input[type=number]{width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;box-sizing:border-box}
@@ -43,10 +43,13 @@
     <input type="file" id="fJson" accept="application/json" style="display:none">
     <label class="fld">Drawing scale (pixels per foot) — one value, or comma-separated per floor</label>
     <input type="text" id="ppf" value="18">
+    <div class="hint">Rough guess is fine — you'll recalibrate exactly in the next screen using your building's real square footage (the "Total ft²" / "Match" button in the review UI).</div>
     <details>
       <summary>Advanced</summary>
       <div class="row">
-        <div><label class="fld">Page number(s) — e.g. "0,1,2" if one page per floor</label><input type="text" id="page" value="0"></div>
+        <div><label class="fld">Page number(s) — e.g. "0,1,2" if one page per floor</label><input type="text" id="page" value="0">
+          <div class="hint">Pages are 0-indexed: 0 = the PDF's first page, 1 = second page, etc.</div>
+        </div>
         <div><label class="fld">Min wall length (ft)</label><input type="number" id="minLen" value="1.0" step="0.1" min="0"></div>
       </div>
     </details>
@@ -56,17 +59,24 @@
 </div>
 <script>
 let pdfFile=null, jsonFile=null;
-function wireDrop(id, fid, onFile){
-  const el=document.getElementById(id), inp=document.getElementById(fid);
+function wireDrop(id, fid, onFile, isValid, badMsg){
+  const el=document.getElementById(id), inp=document.getElementById(fid), fileEl=el.querySelector('.file');
   el.onclick=()=>inp.click();
   inp.onchange=()=>{ if(inp.files[0]) onFile(inp.files[0]); };
   ['dragenter','dragover'].forEach(ev=>el.addEventListener(ev, e=>{ e.preventDefault(); el.classList.add('drag'); }));
   ['dragleave','drop'].forEach(ev=>el.addEventListener(ev, e=>{ e.preventDefault(); el.classList.remove('drag'); }));
-  el.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) onFile(f); });
+  el.addEventListener('drop', e=>{
+    const f=e.dataTransfer.files[0];
+    if(!f) return;
+    if(!isValid(f)){ fileEl.style.color='#b91c1c'; fileEl.textContent=badMsg; return; }
+    fileEl.style.color=''; onFile(f);
+  });
 }
 function updateStart(){ document.getElementById('bStart').disabled = !pdfFile; }
-wireDrop('dPdf','fPdf', f=>{ pdfFile=f; document.getElementById('dPdfFile').textContent=f.name; updateStart(); });
-wireDrop('dJson','fJson', f=>{ jsonFile=f; document.getElementById('dJsonFile').textContent=f.name; updateStart(); });
+const isPdfFile=f=>f.name.toLowerCase().endsWith('.pdf')||f.type==='application/pdf';
+const isJsonFile=f=>f.name.toLowerCase().endsWith('.json');
+wireDrop('dPdf','fPdf', f=>{ pdfFile=f; document.getElementById('dPdfFile').textContent=f.name; updateStart(); }, isPdfFile, 'Not a PDF — drop a .pdf file here.');
+wireDrop('dJson','fJson', f=>{ jsonFile=f; document.getElementById('dJsonFile').textContent=f.name; updateStart(); }, isJsonFile, 'Not a JSON file — drop a .json file here.');
 
 function readDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
 function readText(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file); }); }
