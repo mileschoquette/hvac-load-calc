@@ -394,12 +394,44 @@ def _collect_subtree_runs(root_runs, children):
     return runs
 
 
-def size_duct_network(review, result, design=None):
-    """Auto-sizes every duct run/terminal that isn't flagged `auto: False` (a deliberate
-    manual override). Returns only the changed fields, keyed by id, so the caller can
-    merge them into the live drawing without touching anything else:
-        {"duct_runs": {id: {...}}, "duct_terminals": {id: {...}}, "duct_equipment": {id: {...}}}
-    """
+def _run_length_ft(run, px_per_ft_by_level):
+    """Real drawn length (ft) of `run` — its raw-px segment lengths converted via its own
+    floor's pxPerFt (matched by `level`); None if that level has no matching floor entry
+    (its pressure-drop calc is skipped later, no way to know its real length, don't guess)."""
+    px_per_ft = px_per_ft_by_level.get(run.get("level", 1))
+    if not px_per_ft:
+        return None
+    pts = run["points"]
+    length_px = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+                     for i in range(len(pts) - 1))
+    return length_px / px_per_ft
+
+
+def _max_path_pressure(subtree, changed_runs):
+    """Max root-to-leaf summed `pressure_drop_in_wg` over one AH side's subtree (its own
+    `root_runs`/`children`, as saved in `ah_subtrees`) — the worst-case ("index") run for
+    that side."""
+    root_runs, children = subtree["root_runs"], subtree["children"]
+    if not root_runs:
+        return None
+    best = 0.0
+    stack = [(r, changed_runs.get(r["id"], {}).get("pressure_drop_in_wg") or 0.0) for r in root_runs]
+    while stack:
+        run, total = stack.pop()
+        kids = children.get(id(run), [])
+        if not kids:
+            best = max(best, total)
+        for c in kids:
+            stack.append((c, total + (changed_runs.get(c["id"], {}).get("pressure_drop_in_wg") or 0.0)))
+    return best
+
+
+def _prepare_duct_context(review, result, design):
+    """Setup: design params, the drawn network/rooms, and per-run real lengths (ft) for
+    straight-friction loss — segment lengths in the plan's raw px, converted via that
+    run's OWN floor's pxPerFt (matched by `level`). A run whose level has no matching
+    floor entry is left out of `run_length_ft` entirely; its pressure-drop calc is
+    skipped later (no way to know its real length, don't guess)."""
     design = design or {}
     delta_t = design.get("supply_delta_t") or DEFAULT_SUPPLY_DELTA_T
     friction_target = design.get("friction_rate_in_wg_per_100ft") or DEFAULT_FRICTION_RATE_IN_WG_PER_100FT
@@ -411,26 +443,19 @@ def size_duct_network(review, result, design=None):
     rooms = review.get("rooms", [])
     sensible_by_room = {r["id"]: r.get("sensible_btuh", 0.0) for r in result.get("rooms", [])}
 
-    # Real drawn length (ft) per run, for straight-friction loss — segment lengths in the
-    # plan's raw px, converted via that run's OWN floor's pxPerFt (matched by `level`). A
-    # run whose level has no matching floor entry is left out of `run_length_ft` entirely;
-    # its pressure-drop calc is skipped later (no way to know its real length, don't guess).
     px_per_ft_by_level = {f.get("level", 1): f["pxPerFt"] for f in review.get("floors", []) if f.get("pxPerFt")}
+    run_length_ft = {r["id"]: _run_length_ft(r, px_per_ft_by_level) for r in all_runs}
 
-    def _run_length_ft(run):
-        px_per_ft = px_per_ft_by_level.get(run.get("level", 1))
-        if not px_per_ft:
-            return None
-        pts = run["points"]
-        length_px = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
-                         for i in range(len(pts) - 1))
-        return length_px / px_per_ft
+    return {"delta_t": delta_t, "friction_target": friction_target, "trunk_h": trunk_h,
+            "all_runs": all_runs, "all_terminals": all_terminals, "all_equipment": all_equipment,
+            "rooms": rooms, "sensible_by_room": sensible_by_room, "run_length_ft": run_length_ft}
 
-    run_length_ft = {r["id"]: _run_length_ft(r) for r in all_runs}
 
-    # 1. Terminal CFM: containing room's required supply CFM, split across same-kind
-    # (supply vs return) terminals in that room. A terminal outside every room polygon is
-    # left alone (flagged by simply never appearing in `terminal_cfm`), not guessed at.
+def _compute_terminal_cfm(all_terminals, rooms, sensible_by_room, delta_t):
+    """Step 1 — terminal CFM: containing room's required supply CFM, split across
+    same-kind (supply vs return) terminals in that room. A terminal outside every room
+    polygon is left alone (flagged by simply never appearing in `terminal_cfm`), not
+    guessed at."""
     room_terminal_groups = {}
     for t in all_terminals:
         room = next((r for r in rooms if _point_in_poly(t["point"], r["points"])), None)
@@ -445,6 +470,166 @@ def size_duct_network(review, result, design=None):
         share = room_cfm / len(group) if group else 0.0
         for t in group:
             terminal_cfm[t["id"]] = share
+    return terminal_cfm, room_terminal_groups
+
+
+def _finalize_return_terminal_cfm(room_terminal_groups, terminal_cfm):
+    """Step 2c — return terminal CFM = that room's now-finalized (post-proration,
+    post-round-up-5) supply CFM total, distributed EXACTLY (via `_distribute_exact`, not
+    an independent round per terminal) across that room's return terminals — so a room's
+    return total always matches its supply total to the cfm, even after the AH-match
+    proration rescaled supply away from its theoretical value, and even when a room has
+    several return terminals whose individual round-ups would otherwise drift the room's
+    total off by a few cfm (which is what let an AH's aggregate return total drift off
+    its aggregate supply total in the first place). Not an independent
+    `required_supply_cfm` calc. A room with no supply terminals gets 0 on its return
+    terminals. Mutates `terminal_cfm` in place."""
+    room_supply_totals = {}
+    for (room_id, is_supply), group in room_terminal_groups.items():
+        if is_supply:
+            room_supply_totals[room_id] = sum(terminal_cfm.get(t["id"], 0.0) for t in group)
+    for (room_id, is_supply), group in room_terminal_groups.items():
+        if is_supply:
+            continue
+        dist = _distribute_exact({t["id"]: 1.0 for t in group}, room_supply_totals.get(room_id, 0.0))
+        for t in group:
+            terminal_cfm[t["id"]] = dist[t["id"]]
+
+
+def _size_runs(all_runs, run_cfm, friction_target, trunk_h):
+    """Step 3 — sizing: whatever CFM each run ended up with (skip anything a manual
+    override kept out of `run_cfm`, or that the engineer flagged `auto: False`). Every
+    run — rect, round, or flex — sizes to hit the SAME system-wide target friction rate
+    (equal-friction method), not a fixed velocity. `friction_rate_actual`/`velocity_fpm`
+    are the as-built results after rounding up to a standard size, reported for the
+    engineer to sanity-check, not sizing inputs."""
+    changed_runs = {}
+    for r in all_runs:
+        if not r.get("auto", True) or r["id"] not in run_cfm:
+            continue
+        cfm = run_cfm[r["id"]]
+        form = effective_form(r, all_runs)
+        if form == "rect":
+            width = rect_duct_width(cfm, friction_target, trunk_h)
+            final_de = rect_equivalent_diameter(width, trunk_h) if width else None
+            area = _rect_area_sqft(width, trunk_h) if width else None
+            changed_runs[r["id"]] = {"cfm": round(cfm, 1), "width_in": width, "height_in": trunk_h,
+                                      "diameter_in": None}
+        else:
+            diameter = round_duct_diameter(cfm, friction_target)
+            final_de = diameter
+            area = _round_area_sqft(diameter) if diameter else None
+            changed_runs[r["id"]] = {"cfm": round(cfm, 1), "diameter_in": diameter,
+                                      "width_in": None, "height_in": None}
+        v = _velocity(cfm, area)
+        fr_actual = friction_rate(cfm, final_de)
+        changed_runs[r["id"]]["velocity_fpm"] = round(v, 1) if v is not None else None
+        changed_runs[r["id"]]["friction_rate_actual"] = round(fr_actual, 4) if fr_actual is not None else None
+    return changed_runs
+
+
+def _apply_pressure_drop(all_runs, changed_runs, run_length_ft, run_is_root, run_parent_id):
+    """Step 4 — pressure drop: each run's own straight friction loss (its final rounded
+    size's actual friction rate x its real drawn length) plus exactly ONE "connection"
+    fitting loss at its own upstream end — AH entrance if it's a root run, else a branch
+    tee if `find_tee_point` finds one, else a transition/reducer if its final size
+    differs from its parent's, else nothing for a plain same-size continuation — plus one
+    elbow loss for every interior vertex in its OWN drawn points where the direction
+    changes by more than ELBOW_ANGLE_THRESHOLD_DEG (30 degrees). This "one connection
+    fitting + N interior elbows, inferred from 2D drawn centerlines" model is a
+    deliberate simplification: a plan view can't show every physical coupling a duct shop
+    actually installs, so it's the best approximation available without the engineer
+    tagging each fitting by hand. Mutates `changed_runs` in place."""
+    for r in all_runs:
+        entry = changed_runs.get(r["id"])
+        if entry is None:
+            continue
+        length_ft = run_length_ft.get(r["id"])
+        if length_ft is None:
+            continue   # this run's level has no matching floor entry — no way to know, don't guess
+        own_v = entry["velocity_fpm"]
+        own_vp = _velocity_pressure(own_v)
+        straight_loss = (entry["friction_rate_actual"] or 0.0) / 100.0 * length_ft
+
+        if r["id"] in run_is_root:
+            fitting_loss = AH_ENTRANCE_C * own_vp
+        else:
+            tee = find_tee_point(r, all_runs)
+            if tee:
+                trunk_entry = changed_runs.get(tee["on_run"]["id"])
+                trunk_v = trunk_entry["velocity_fpm"] if trunk_entry else None
+                fitting_loss = _branch_tee_c(own_v / trunk_v) * own_vp if (trunk_v and own_v) else 0.0
+            else:
+                parent_id = run_parent_id.get(r["id"])
+                parent_entry = changed_runs.get(parent_id) if parent_id is not None else None
+                own_size = (entry["width_in"], entry["height_in"], entry["diameter_in"])
+                parent_size = ((parent_entry["width_in"], parent_entry["height_in"], parent_entry["diameter_in"])
+                                if parent_entry else None)
+                if parent_entry and parent_size != own_size:
+                    fitting_loss = TRANSITION_C * _velocity_pressure(parent_entry["velocity_fpm"])
+                else:
+                    fitting_loss = 0.0   # same size as parent (or parent unresolved) -> no fitting
+
+        # Elbow C by this run's own cross-section (round/flex duct is always round; only a
+        # rect-form run uses the rectangular-miter-with-vanes coefficient).
+        elbow_c = ELBOW_C_RECT if entry["width_in"] else ELBOW_C_ROUND
+        elbow_loss = 0.0
+        pts = r["points"]
+        for i in range(1, len(pts) - 1):
+            v1 = (pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+            v2 = (pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+            len1, len2 = math.hypot(*v1), math.hypot(*v2)
+            if len1 < 1e-6 or len2 < 1e-6:
+                continue
+            cos_ang = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)))
+            if math.degrees(math.acos(cos_ang)) > ELBOW_ANGLE_THRESHOLD_DEG:
+                elbow_loss += elbow_c * own_vp
+
+        entry["pressure_drop_in_wg"] = round(straight_loss + fitting_loss + elbow_loss, 5)
+
+
+def _finalize_static_pressure(all_terminals, terminal_cfm, equipment_cfm, ah_subtrees, changed_runs):
+    """Step 5 — static pressure per AH: walk each AH's own supply subtree and its own
+    return subtree (via the per-eq root_runs/children saved in `ah_subtrees`) from
+    root(s) to every leaf, summing `pressure_drop_in_wg` along each root-to-leaf path,
+    and take the MAX over all leaf paths on each side — the worst-case ("index") run for
+    that side. The fan has to overcome both sides, so static_pressure_in_wg = supply's
+    worst path + return's worst path. Also finalizes changed terminal CFM/size."""
+    changed_terminals = {}
+    for t in all_terminals:
+        if not (t.get("auto", True) and t["id"] in terminal_cfm):
+            continue
+        cfm = terminal_cfm[t["id"]]
+        match = match_diffuser(t["kind"], cfm)
+        changed_terminals[t["id"]] = {"cfm": round(cfm, 1), "size": match["size"] if match else None}
+
+    changed_equipment = {eq_id: {"supply_cfm": round(v["supply"], 1) if "supply" in v else None,
+                                  "return_cfm": round(v["return"], 1) if "return" in v else None}
+                         for eq_id, v in equipment_cfm.items()}
+
+    for eq_id, subtrees in ah_subtrees.items():
+        supply_max = _max_path_pressure(subtrees["supply"], changed_runs) if "supply" in subtrees else None
+        return_max = _max_path_pressure(subtrees["return"], changed_runs) if "return" in subtrees else None
+        if supply_max is not None and return_max is not None:
+            changed_equipment.setdefault(eq_id, {"supply_cfm": None, "return_cfm": None})[
+                "static_pressure_in_wg"] = round(supply_max + return_max, 4)
+
+    return changed_terminals, changed_equipment
+
+
+def size_duct_network(review, result, design=None):
+    """Auto-sizes every duct run/terminal that isn't flagged `auto: False` (a deliberate
+    manual override). Returns only the changed fields, keyed by id, so the caller can
+    merge them into the live drawing without touching anything else:
+        {"duct_runs": {id: {...}}, "duct_terminals": {id: {...}}, "duct_equipment": {id: {...}}}
+    """
+    ctx = _prepare_duct_context(review, result, design)
+    all_runs, all_terminals, all_equipment = ctx["all_runs"], ctx["all_terminals"], ctx["all_equipment"]
+    rooms, sensible_by_room = ctx["rooms"], ctx["sensible_by_room"]
+    delta_t, friction_target, trunk_h = ctx["delta_t"], ctx["friction_target"], ctx["trunk_h"]
+    run_length_ft = ctx["run_length_ft"]
+
+    terminal_cfm, room_terminal_groups = _compute_terminal_cfm(all_terminals, rooms, sensible_by_room, delta_t)
 
     # 2. Network CFM propagation: partition by (level, system) so floor 1 never connects
     # to floor 2 and a supply terminal never attaches to a return run, then BFS from
@@ -587,154 +772,16 @@ def size_duct_network(review, result, design=None):
         if system == "supply":
             _process_group(level, system, group)
 
-    # 2c. Return terminal CFM = that room's now-finalized (post-proration, post-round-up-5)
-    # supply CFM total, distributed EXACTLY (via `_distribute_exact`, not an independent
-    # round per terminal) across that room's return terminals — so a room's return total
-    # always matches its supply total to the cfm, even after the AH-match proration above
-    # rescaled supply away from its theoretical value, and even when a room has several
-    # return terminals whose individual round-ups would otherwise drift the room's total off
-    # by a few cfm (which is what let an AH's aggregate return total drift off its aggregate
-    # supply total in the first place). Not an independent `required_supply_cfm` calc. A
-    # room with no supply terminals gets 0 on its return terminals.
-    room_supply_totals = {}
-    for (room_id, is_supply), group in room_terminal_groups.items():
-        if is_supply:
-            room_supply_totals[room_id] = sum(terminal_cfm.get(t["id"], 0.0) for t in group)
-    for (room_id, is_supply), group in room_terminal_groups.items():
-        if is_supply:
-            continue
-        dist = _distribute_exact({t["id"]: 1.0 for t in group}, room_supply_totals.get(room_id, 0.0))
-        for t in group:
-            terminal_cfm[t["id"]] = dist[t["id"]]
+    _finalize_return_terminal_cfm(room_terminal_groups, terminal_cfm)
 
     for (level, system), group in by_key.items():
         if system == "return":
             _process_group(level, system, group)
 
-    # 3. Sizing: whatever CFM each run ended up with (skip anything a manual override
-    # kept out of `run_cfm`, or that the engineer flagged `auto: False`). Every run — rect,
-    # round, or flex — sizes to hit the SAME system-wide target friction rate (equal-friction
-    # method), not a fixed velocity. `friction_rate_actual`/`velocity_fpm` are the as-built
-    # results after rounding up to a standard size, reported for the engineer to sanity-check,
-    # not sizing inputs.
-    changed_runs = {}
-    for r in all_runs:
-        if not r.get("auto", True) or r["id"] not in run_cfm:
-            continue
-        cfm = run_cfm[r["id"]]
-        form = effective_form(r, all_runs)
-        if form == "rect":
-            width = rect_duct_width(cfm, friction_target, trunk_h)
-            final_de = rect_equivalent_diameter(width, trunk_h) if width else None
-            area = _rect_area_sqft(width, trunk_h) if width else None
-            changed_runs[r["id"]] = {"cfm": round(cfm, 1), "width_in": width, "height_in": trunk_h,
-                                      "diameter_in": None}
-        else:
-            diameter = round_duct_diameter(cfm, friction_target)
-            final_de = diameter
-            area = _round_area_sqft(diameter) if diameter else None
-            changed_runs[r["id"]] = {"cfm": round(cfm, 1), "diameter_in": diameter,
-                                      "width_in": None, "height_in": None}
-        v = _velocity(cfm, area)
-        fr_actual = friction_rate(cfm, final_de)
-        changed_runs[r["id"]]["velocity_fpm"] = round(v, 1) if v is not None else None
-        changed_runs[r["id"]]["friction_rate_actual"] = round(fr_actual, 4) if fr_actual is not None else None
-
-    # 4. Pressure drop: each run's own straight friction loss (its final rounded size's actual
-    # friction rate x its real drawn length) plus exactly ONE "connection" fitting loss at its
-    # own upstream end — AH entrance if it's a root run, else a branch tee if `find_tee_point`
-    # finds one, else a transition/reducer if its final size differs from its parent's, else
-    # nothing for a plain same-size continuation — plus one elbow loss for every interior
-    # vertex in its OWN drawn points where the direction changes by more than
-    # ELBOW_ANGLE_THRESHOLD_DEG (30 degrees). This "one connection fitting + N interior
-    # elbows, inferred from 2D drawn centerlines" model is a deliberate simplification: a plan
-    # view can't show every physical coupling a duct shop actually installs, so it's the best
-    # approximation available without the engineer tagging each fitting by hand.
-    for r in all_runs:
-        entry = changed_runs.get(r["id"])
-        if entry is None:
-            continue
-        length_ft = run_length_ft.get(r["id"])
-        if length_ft is None:
-            continue   # this run's level has no matching floor entry — no way to know, don't guess
-        own_v = entry["velocity_fpm"]
-        own_vp = _velocity_pressure(own_v)
-        straight_loss = (entry["friction_rate_actual"] or 0.0) / 100.0 * length_ft
-
-        if r["id"] in run_is_root:
-            fitting_loss = AH_ENTRANCE_C * own_vp
-        else:
-            tee = find_tee_point(r, all_runs)
-            if tee:
-                trunk_entry = changed_runs.get(tee["on_run"]["id"])
-                trunk_v = trunk_entry["velocity_fpm"] if trunk_entry else None
-                fitting_loss = _branch_tee_c(own_v / trunk_v) * own_vp if (trunk_v and own_v) else 0.0
-            else:
-                parent_id = run_parent_id.get(r["id"])
-                parent_entry = changed_runs.get(parent_id) if parent_id is not None else None
-                own_size = (entry["width_in"], entry["height_in"], entry["diameter_in"])
-                parent_size = ((parent_entry["width_in"], parent_entry["height_in"], parent_entry["diameter_in"])
-                                if parent_entry else None)
-                if parent_entry and parent_size != own_size:
-                    fitting_loss = TRANSITION_C * _velocity_pressure(parent_entry["velocity_fpm"])
-                else:
-                    fitting_loss = 0.0   # same size as parent (or parent unresolved) -> no fitting
-
-        # Elbow C by this run's own cross-section (round/flex duct is always round; only a
-        # rect-form run uses the rectangular-miter-with-vanes coefficient).
-        elbow_c = ELBOW_C_RECT if entry["width_in"] else ELBOW_C_ROUND
-        elbow_loss = 0.0
-        pts = r["points"]
-        for i in range(1, len(pts) - 1):
-            v1 = (pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
-            v2 = (pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
-            len1, len2 = math.hypot(*v1), math.hypot(*v2)
-            if len1 < 1e-6 or len2 < 1e-6:
-                continue
-            cos_ang = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)))
-            if math.degrees(math.acos(cos_ang)) > ELBOW_ANGLE_THRESHOLD_DEG:
-                elbow_loss += elbow_c * own_vp
-
-        entry["pressure_drop_in_wg"] = round(straight_loss + fitting_loss + elbow_loss, 5)
-
-    # 5. Static pressure per AH: walk each AH's own supply subtree and its own return subtree
-    # (via the per-eq root_runs/children saved in `ah_subtrees` above) from root(s) to every
-    # leaf, summing `pressure_drop_in_wg` along each root-to-leaf path, and take the MAX over
-    # all leaf paths on each side — the worst-case ("index") run for that side. The fan has to
-    # overcome both sides, so static_pressure_in_wg = supply's worst path + return's worst path.
-    def _max_path_pressure(subtree):
-        root_runs, children = subtree["root_runs"], subtree["children"]
-        if not root_runs:
-            return None
-        best = 0.0
-        stack = [(r, changed_runs.get(r["id"], {}).get("pressure_drop_in_wg") or 0.0) for r in root_runs]
-        while stack:
-            run, total = stack.pop()
-            kids = children.get(id(run), [])
-            if not kids:
-                best = max(best, total)
-            for c in kids:
-                stack.append((c, total + (changed_runs.get(c["id"], {}).get("pressure_drop_in_wg") or 0.0)))
-        return best
-
-    changed_terminals = {}
-    for t in all_terminals:
-        if not (t.get("auto", True) and t["id"] in terminal_cfm):
-            continue
-        cfm = terminal_cfm[t["id"]]
-        match = match_diffuser(t["kind"], cfm)
-        changed_terminals[t["id"]] = {"cfm": round(cfm, 1), "size": match["size"] if match else None}
-
-    changed_equipment = {eq_id: {"supply_cfm": round(v["supply"], 1) if "supply" in v else None,
-                                  "return_cfm": round(v["return"], 1) if "return" in v else None}
-                         for eq_id, v in equipment_cfm.items()}
-
-    for eq_id, subtrees in ah_subtrees.items():
-        supply_max = _max_path_pressure(subtrees["supply"]) if "supply" in subtrees else None
-        return_max = _max_path_pressure(subtrees["return"]) if "return" in subtrees else None
-        if supply_max is not None and return_max is not None:
-            changed_equipment.setdefault(eq_id, {"supply_cfm": None, "return_cfm": None})[
-                "static_pressure_in_wg"] = round(supply_max + return_max, 4)
+    changed_runs = _size_runs(all_runs, run_cfm, friction_target, trunk_h)
+    _apply_pressure_drop(all_runs, changed_runs, run_length_ft, run_is_root, run_parent_id)
+    changed_terminals, changed_equipment = _finalize_static_pressure(
+        all_terminals, terminal_cfm, equipment_cfm, ah_subtrees, changed_runs)
 
     return {"duct_runs": changed_runs, "duct_terminals": changed_terminals, "duct_equipment": changed_equipment}
 
