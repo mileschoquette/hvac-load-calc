@@ -104,7 +104,7 @@ def _weather(types):
                      lat=getattr(resolved, "lat", None), lon=getattr(resolved, "lon", None),
                      outdoor_grains=getattr(resolved, "dehum_hr_1", None),
                      tau_b=getattr(resolved, "tau_b", None), tau_d=getattr(resolved, "tau_d", None))
-    except Exception as e:
+    except (ImportError, FileNotFoundError, json.JSONDecodeError, KeyError) as e:
         print(f"  (weather station lookup unavailable: {e}; using design defaults)")
 
     manual = {k: v for k, v in {
@@ -243,101 +243,7 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
     return resumed
 
 
-APP_HTML = r"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Adicot Load Calc</title>
-<style>
-  html,body{margin:0;height:100%;font-family:-apple-system,system-ui,sans-serif;background:#f8fafc;color:#111827}
-  .wrap{max-width:640px;margin:0 auto;padding:48px 24px}
-  h1{font-size:24px;margin:0 0 6px}
-  .sub{color:#6b7280;font-size:14px;margin-bottom:28px}
-  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:24px}
-  .drop{border:2px dashed #cbd5e1;border-radius:10px;padding:22px;text-align:center;cursor:pointer;margin-bottom:16px;transition:border-color .15s,background .15s}
-  .drop:hover,.drop.drag{border-color:#2563eb;background:#eff6ff}
-  .drop .ttl{font-weight:600;margin-bottom:4px}
-  .drop .hint{font-size:12.5px;color:#6b7280}
-  .drop .file{margin-top:8px;font-size:13px;color:#111827;font-weight:500}
-  label.fld{display:block;font-size:12.5px;color:#374151;margin:14px 0 4px}
-  input[type=number]{width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;box-sizing:border-box}
-  details{margin-top:10px;font-size:13px;color:#374151}
-  summary{cursor:pointer;color:#2563eb}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  button.start{width:100%;margin-top:20px;background:#2563eb;color:#fff;border:0;padding:12px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
-  button.start:disabled{background:#cbd5e1;cursor:not-allowed}
-  .status{margin-top:14px;font-size:13.5px}
-  .status.err{color:#b91c1c}
-  .status.ok{color:#15803d}
-</style></head>
-<body><div class="wrap">
-  <h1>Adicot Load Calc</h1>
-  <div class="sub">Drop in your plans PDF and a JSON file to get started.</div>
-  <div class="card">
-    <div class="drop" id="dPdf">
-      <div class="ttl">📐 Plans PDF</div>
-      <div class="hint">Drag &amp; drop, or click to browse</div>
-      <div class="file" id="dPdfFile"></div>
-    </div>
-    <div class="drop" id="dJson">
-      <div class="ttl">📄 Types JSON — or your saved progress</div>
-      <div class="hint">First time on a project: the JSON from the Adicot DM Setup site.<br>Picking back up: your saved rooms_edited.json instead — detected automatically. Optional.</div>
-      <div class="file" id="dJsonFile"></div>
-    </div>
-    <input type="file" id="fPdf" accept="application/pdf" style="display:none">
-    <input type="file" id="fJson" accept="application/json" style="display:none">
-    <label class="fld">Drawing scale (pixels per foot) — one value, or comma-separated per floor</label>
-    <input type="text" id="ppf" value="18">
-    <details>
-      <summary>Advanced</summary>
-      <div class="row">
-        <div><label class="fld">Page number(s) — e.g. "0,1,2" if one page per floor</label><input type="text" id="page" value="0"></div>
-        <div><label class="fld">Min wall length (ft)</label><input type="number" id="minLen" value="1.0" step="0.1" min="0"></div>
-      </div>
-    </details>
-    <button class="start" id="bStart" disabled>Start</button>
-    <div class="status" id="status"></div>
-  </div>
-</div>
-<script>
-let pdfFile=null, jsonFile=null;
-function wireDrop(id, fid, onFile){
-  const el=document.getElementById(id), inp=document.getElementById(fid);
-  el.onclick=()=>inp.click();
-  inp.onchange=()=>{ if(inp.files[0]) onFile(inp.files[0]); };
-  ['dragenter','dragover'].forEach(ev=>el.addEventListener(ev, e=>{ e.preventDefault(); el.classList.add('drag'); }));
-  ['dragleave','drop'].forEach(ev=>el.addEventListener(ev, e=>{ e.preventDefault(); el.classList.remove('drag'); }));
-  el.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) onFile(f); });
-}
-function updateStart(){ document.getElementById('bStart').disabled = !pdfFile; }
-wireDrop('dPdf','fPdf', f=>{ pdfFile=f; document.getElementById('dPdfFile').textContent=f.name; updateStart(); });
-wireDrop('dJson','fJson', f=>{ jsonFile=f; document.getElementById('dJsonFile').textContent=f.name; updateStart(); });
-
-function readDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
-function readText(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file); }); }
-
-document.getElementById('bStart').onclick=async()=>{
-  const btn=document.getElementById('bStart'), status=document.getElementById('status');
-  btn.disabled=true; btn.textContent='Working…'; status.className='status';
-  status.textContent='Reading the plan — this can take a few seconds for a detailed drawing…';
-  try{
-    const dataUrl=await readDataURL(pdfFile);
-    const payload={
-      pdf_b64: dataUrl.split(',')[1], pdf_name: pdfFile.name,
-      json_text: jsonFile ? await readText(jsonFile) : null,
-      ppf: document.getElementById('ppf').value || '18',
-      page: document.getElementById('page').value || '0',
-      min_len: parseFloat(document.getElementById('minLen').value)||1.0
-    };
-    const res=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const data=await res.json();
-    if(!res.ok || data.ok===false) throw new Error(data.error||('server error '+res.status));
-    status.className='status ok'; status.textContent=(data.resumed?'Resumed — ':'Parsed — ')+'opening the review UI…';
-    window.location='/review.html';
-  }catch(e){
-    status.className='status err'; status.textContent='Error: '+e.message;
-    btn.disabled=false; btn.textContent='Start';
-  }
-};
-</script>
-</body></html>"""
+APP_HTML = (Path(__file__).parent / "templates" / "landing.html").read_text()
 
 
 class ReviewHandler(SimpleHTTPRequestHandler):
@@ -394,7 +300,8 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         # Named after the dropped PDF (embedded as pdf_stem by export_review.export/resume
         # and carried through every buildPayload()) instead of a fixed rooms_edited.json —
         # so different projects in this folder don't keep clobbering each other's save.
-        out_name = f"{review['pdf_stem']}.json" if review.get("pdf_stem") else "rooms_edited.json"
+        stem = Path(review["pdf_stem"]).name if review.get("pdf_stem") else None
+        out_name = f"{stem}.json" if stem else "rooms_edited.json"
         (ROOT / out_name).write_text(json.dumps(review, indent=2))
         if self.path == "/api/save":
             self._json({"ok": True, "filename": out_name})
