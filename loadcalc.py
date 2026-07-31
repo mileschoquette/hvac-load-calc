@@ -221,7 +221,11 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
 
     resumed = False
     if json_text:
-        data = json.loads(json_text)
+        try:
+            data = json.loads(json_text)
+        except json.JSONDecodeError:
+            raise ValueError("That JSON file isn't valid. Check that it's the "
+                             "DM-setup types file or a saved rooms_edited.json.") from None
         if "rooms" in data:
             (ROOT / "rooms_edited.json").write_text(json_text)
             resumed = True
@@ -230,6 +234,28 @@ def _start_project(pdf_bytes, pdf_name, json_text, ppf, min_len, page):
 
     pages = _parse_pages_arg(page)
     ppfs = _parse_ppf_arg(ppf, len(pages))
+
+    # Known failure modes on the dropped PDF itself, translated to plain English
+    # before export_review.export gets anywhere near them (it would otherwise
+    # surface a raw fitz/pymupdf exception, or an IndexError, straight to the user).
+    import fitz
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        raise ValueError("That PDF couldn't be read. Make sure it's not "
+                         "password-protected or corrupted.") from None
+    if doc.needs_pass:
+        doc.close()
+        raise ValueError("That PDF is password-protected. Remove the password "
+                         "and try again.")
+    n_pages = doc.page_count
+    doc.close()
+    for pg_no in pages:
+        if pg_no < 0 or pg_no >= n_pages:
+            raise ValueError(
+                f"Page {pg_no} doesn't exist in this PDF (it has {n_pages} "
+                f"page{'s' if n_pages != 1 else ''}).")
+
     export_review.export(str(pdf_path), ppfs, min_len, pages)
     if resumed:
         export_review.resume(str(ROOT / "rooms_edited.json"))

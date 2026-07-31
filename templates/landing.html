@@ -18,9 +18,12 @@
   .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   button.start{width:100%;margin-top:20px;background:#2563eb;color:#fff;border:0;padding:12px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
   button.start:disabled{background:#cbd5e1;cursor:not-allowed}
-  .status{margin-top:14px;font-size:13.5px}
+  .status{margin-top:14px;font-size:13.5px;display:flex;align-items:center;gap:8px}
   .status.err{color:#b91c1c}
   .status.ok{color:#15803d}
+  .spinner{width:14px;height:14px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:spin .7s linear infinite;flex:none;display:none}
+  .status.busy .spinner{display:inline-block}
+  @keyframes spin{to{transform:rotate(360deg)}}
 </style></head>
 <body><div class="wrap">
   <h1>Adicot Load Calc</h1>
@@ -48,7 +51,7 @@
       </div>
     </details>
     <button class="start" id="bStart" disabled>Start</button>
-    <div class="status" id="status"></div>
+    <div class="status" id="status"><span class="spinner"></span><span id="statusMsg"></span></div>
   </div>
 </div>
 <script>
@@ -69,9 +72,9 @@ function readDataURL(file){ return new Promise((res,rej)=>{ const r=new FileRead
 function readText(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file); }); }
 
 document.getElementById('bStart').onclick=async()=>{
-  const btn=document.getElementById('bStart'), status=document.getElementById('status');
-  btn.disabled=true; btn.textContent='Working…'; status.className='status';
-  status.textContent='Reading the plan — this can take a few seconds for a detailed drawing…';
+  const btn=document.getElementById('bStart'), status=document.getElementById('status'), msg=document.getElementById('statusMsg');
+  btn.disabled=true; btn.textContent='Working…'; status.className='status busy';
+  msg.textContent='Reading the plan — this can take a few seconds for a detailed drawing…';
   try{
     const dataUrl=await readDataURL(pdfFile);
     const payload={
@@ -84,10 +87,10 @@ document.getElementById('bStart').onclick=async()=>{
     const res=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data=await res.json();
     if(!res.ok || data.ok===false) throw new Error(data.error||('server error '+res.status));
-    status.className='status ok'; status.textContent=(data.resumed?'Resumed — ':'Parsed — ')+'opening the review UI…';
+    status.className='status ok'; msg.textContent=(data.resumed?'Resumed — ':'Parsed — ')+'opening the review UI…';
     window.location='/review.html';
   }catch(e){
-    status.className='status err'; status.textContent='Error: '+e.message;
+    status.className='status err'; msg.textContent='Error: '+e.message;
     btn.disabled=false; btn.textContent='Start';
   }
 };
