@@ -448,6 +448,28 @@ _allDuctRuns.forEach(d=>{ if(!floorDuctRunsMap.has(d.level)) floorDuctRunsMap.se
 _allDuctTerminals.forEach(t=>{ if(!floorTerminalsMap.has(t.level)) floorTerminalsMap.set(t.level, []); floorTerminalsMap.get(t.level).push(t); });
 _allDuctEquipment.forEach(e=>{ if(!floorEquipmentMap.has(e.level)) floorEquipmentMap.set(e.level, []); floorEquipmentMap.get(e.level).push(e); });
 
+// Backward-compat migration for projects saved before onRun/startOn/endOn (parametric duct
+// attachment) existed: derive them once from proximity, per floor, using the same 1.5px
+// endpoint-inclusive tolerance findTeePoint/engine/ducts.py's TEE_TOL_PX use. Only fills in
+// fields that are strictly undefined — never null, since null means a deliberate shift-detach
+// that must survive a reload — so once a project is saved once under the new format this
+// never re-guesses again.
+function bootstrapDuctAttachments(runs, terminals, equipment){
+  const TOL=1.5;
+  const nearestOnOtherRuns=(pt, excludeId)=>{
+    let best=null;
+    runs.forEach(r=>{ if(r.id===excludeId) return; for(let i=0;i<r.points.length-1;i++){ const cs=closestOnSeg(pt,r.points[i],r.points[i+1]); if(cs.dist<=TOL && (!best||cs.dist<best.dist)) best={run:r,seg:i,t:cs.t}; } });
+    return best;
+  };
+  terminals.forEach(t=>{ if(t.onRun===undefined){ const n=nearestOnOtherRuns(t.point,null); t.onRun = n ? {runId:n.run.id,seg:n.seg,t:n.t} : null; } });
+  equipment.forEach(e=>{ if(e.onRun===undefined){ const n=nearestOnOtherRuns(e.point,null); e.onRun = n ? {runId:n.run.id,seg:n.seg,t:n.t} : null; } });
+  runs.forEach(d=>{
+    if(d.startOn===undefined){ const n=nearestOnOtherRuns(d.points[0], d.id); d.startOn = n ? {runId:n.run.id,seg:n.seg,t:n.t} : null; }
+    if(d.endOn===undefined){ const n=nearestOnOtherRuns(d.points[d.points.length-1], d.id); d.endOn = n ? {runId:n.run.id,seg:n.seg,t:n.t} : null; }
+  });
+}
+floorMeta.forEach(f=>bootstrapDuctAttachments(floorDuctRunsMap.get(f.level)||[], floorTerminalsMap.get(f.level)||[], floorEquipmentMap.get(f.level)||[]));
+
 // Every duct run/terminal/equipment across ALL floors, live object references (not the
 // current floor's working array) — 📐 Auto-Size Ducts' server response can touch any
 // floor's entities, not just the one currently being viewed.
@@ -860,13 +882,15 @@ function nearestEdge(wp){ let best=null; rooms.forEach(r=>{ const P=r.points; fo
 // endpoints — a real duct takeoff, and the fix for "can't attach the flex duct to the main
 // trunk" (previously only exact vertices were snap targets). Caller applies its own pixel
 // tolerance, same convention as nearestEdge.
-function closestOnSeg(p,a,b){ const dx=b[0]-a[0], dy=b[1]-a[1], L2=dx*dx+dy*dy||1e-9; let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t=Math.max(0,Math.min(1,t)); const q=[a[0]+t*dx,a[1]+t*dy]; return {point:q, dist:Math.hypot(p[0]-q[0],p[1]-q[1])}; }
+function closestOnSeg(p,a,b){ const dx=b[0]-a[0], dy=b[1]-a[1], L2=dx*dx+dy*dy||1e-9; let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2; t=Math.max(0,Math.min(1,t)); const q=[a[0]+t*dx,a[1]+t*dy]; return {point:q, dist:Math.hypot(p[0]-q[0],p[1]-q[1]), t}; }
+// Same nearest-point scan as before, but also reports which run (if any) the winning point
+// came from — a terminal/equipment placed via snap can then attach to that run (see mousedown).
 function nearestDuctPoint(wp){
   let best=null;
-  const consider=p=>{ const dist=Math.hypot(wp[0]-p[0],wp[1]-p[1]); if(!best||dist<best.dist) best={point:p,dist:dist}; };
+  const consider=(p,run)=>{ const dist=Math.hypot(wp[0]-p[0],wp[1]-p[1]); if(!best||dist<best.dist) best={point:p,dist:dist,run:run||null}; };
   ductRuns.forEach(d=>{
-    d.points.forEach(consider);
-    for(let i=0;i<d.points.length-1;i++) consider(closestOnSeg(wp,d.points[i],d.points[i+1]).point);
+    d.points.forEach(p=>consider(p,d));
+    for(let i=0;i<d.points.length-1;i++) consider(closestOnSeg(wp,d.points[i],d.points[i+1]).point,d);
   });
   ductTerminals.forEach(t=>consider(t.point));
   ductEquipment.forEach(eq=>consider(eq.point));
@@ -902,31 +926,68 @@ function findTeePoint(d){
   if(e){ const prv=d.points[d.points.length-2], dx=prv[0]-e.point[0], dy=prv[1]-e.point[1], len=Math.hypot(dx,dy)||1; return {end:'end', point:e.point, dir:[dx/len,dy/len], onRun:e.run}; }
   return null;
 }
-// Everything currently coincident with any point along `run`'s own points — terminals,
-// equipment, and other runs' endpoints — for drags to carry along. Broader than
-// findTeePoint on purpose: an endpoint-to-endpoint join counts here too, not just a
-// mid-span tee, matching engine/ducts.py's _runs_connect convention. Same closestOnSeg +
-// 1.5px world-space tolerance findTeePoint uses.
-function runAttachments(run){
-  const TOL=1.5;
-  const onRun=pt=>{ for(let i=0;i<run.points.length-1;i++){ if(closestOnSeg(pt,run.points[i],run.points[i+1]).dist<=TOL) return true; } return false; };
-  const out=[];
-  ductTerminals.forEach(t=>{ if(onRun(t.point)) out.push({kind:'terminal', item:t}); });
-  ductEquipment.forEach(eq=>{ if(onRun(eq.point)) out.push({kind:'equip', item:eq}); });
-  ductRuns.forEach(r=>{
-    if(r.id===run.id) return;
-    if(onRun(r.points[0])) out.push({kind:'run', item:r, end:'start'});
-    if(onRun(r.points[r.points.length-1])) out.push({kind:'run', item:r, end:'end'});
-  });
-  return out;
-}
 // Does `pt` sit on an existing vertex of some run — a terminal/equipment's own perspective
-// ("which run+index am I riding on"), as opposed to runAttachments' run-side view. Used to
-// decide what a point drag should carry along.
+// ("which run+index am I riding on"). Used to decide what a point drag should carry along
+// (the legacy exact-vertex handle; onRun/attachTo below cover the general mid-span case).
 function vertexUnder(pt){
   const TOL=1.5;
   for(const r of ductRuns){ for(let vi=0;vi<r.points.length;vi++){ if(Math.hypot(pt[0]-r.points[vi][0],pt[1]-r.points[vi][1])<=TOL) return {run:r,vi:vi}; } }
   return null;
+}
+// Parametric duct attachment — the duct equivalent of an opening's {rid,edge,t}: instead of a
+// branch/terminal/equipment storing only a raw absolute point, it can reference {runId,seg,t}
+// (which segment of the parent run's points polyline, and how far along it) so any edit to the
+// parent run's geometry keeps it glued to the right spot with no special-case "carry along"
+// code. attachTo finds that reference for a point that's currently sitting on `run`; resolveAttach
+// is the inverse, turning a reference back into a live absolute point off the run's CURRENT points.
+function attachTo(run, pt){
+  let best=null;
+  for(let i=0;i<run.points.length-1;i++){ const cs=closestOnSeg(pt,run.points[i],run.points[i+1]); if(!best||cs.dist<best.dist) best={seg:i,t:cs.t,dist:cs.dist}; }
+  return best ? {runId:run.id, seg:best.seg, t:best.t} : null;
+}
+function resolveAttach(a){
+  const r=ductRuns.find(x=>x.id===a.runId); if(!r||!r.points[a.seg]||!r.points[a.seg+1]) return null;
+  const A=r.points[a.seg], B=r.points[a.seg+1];
+  return [A[0]+(B[0]-A[0])*a.t, A[1]+(B[1]-A[1])*a.t];
+}
+// Single choke point that keeps every attached item's cached point/points entry in sync with its
+// parent run's current geometry — called at the top of draw() (every frame) and buildPayload()
+// (belt-and-suspenders at save time). 3 passes so a branch-off-a-branch chain (a run attached to
+// a run attached to a run) settles without any manual dependency-ordering. A dangling reference
+// (parent run deleted) resolves to null and self-clears — the item just becomes free-standing.
+function syncDuctAttachments(){
+  for(let pass=0; pass<3; pass++){
+    ductRuns.forEach(d=>{
+      if(d.startOn){ const p=resolveAttach(d.startOn); if(p) d.points[0]=p; else d.startOn=null; }
+      if(d.endOn){ const p=resolveAttach(d.endOn); if(p) d.points[d.points.length-1]=p; else d.endOn=null; }
+    });
+  }
+  ductTerminals.forEach(t=>{ if(t.onRun){ const p=resolveAttach(t.onRun); if(p) t.point=p; else t.onRun=null; } });
+  ductEquipment.forEach(e=>{ if(e.onRun){ const p=resolveAttach(e.onRun); if(p) e.point=p; else e.onRun=null; } });
+}
+// A structural edit that changes `run`'s points.length (vertex insert/delete, split) can't have
+// its dependents' seg indices shifted analytically, so instead: snapshot every dependent's
+// CURRENT absolute position before the edit, then resume() re-derives a fresh onRun/startOn/endOn
+// against the post-edit polyline(s) from that same position. candidateRuns is every run the edit
+// might reattach items to — just [run] for insert/delete, [run,twin] for a split (a mid-span item
+// can end up owned by either half); defaults to [run] when omitted.
+function beginTopologyChange(run, candidateRuns){
+  candidateRuns = candidateRuns || [run];
+  const snaps=[];
+  ductTerminals.forEach(t=>{ if(t.onRun && t.onRun.runId===run.id) snaps.push({item:t, key:'onRun', pt:t.point.slice()}); });
+  ductEquipment.forEach(e=>{ if(e.onRun && e.onRun.runId===run.id) snaps.push({item:e, key:'onRun', pt:e.point.slice()}); });
+  ductRuns.forEach(r=>{
+    if(r.id===run.id) return;
+    if(r.startOn && r.startOn.runId===run.id) snaps.push({item:r, key:'startOn', pt:r.points[0].slice()});
+    if(r.endOn && r.endOn.runId===run.id) snaps.push({item:r, key:'endOn', pt:r.points[r.points.length-1].slice()});
+  });
+  return function resume(){
+    snaps.forEach(s=>{
+      let best=null;
+      candidateRuns.forEach(r=>{ for(let i=0;i<r.points.length-1;i++){ const cs=closestOnSeg(s.pt,r.points[i],r.points[i+1]); if(!best||cs.dist<best.dist) best={runId:r.id, seg:i, t:cs.t, dist:cs.dist}; } });
+      s.item[s.key] = best ? {runId:best.runId, seg:best.seg, t:best.t} : null;
+    });
+  };
 }
 // A run's physical form: an explicit override (set by the user after splitting) always
 // wins; otherwise 'auto' resolves from topology — trunk (rect) unless this run tees off
@@ -969,6 +1030,7 @@ function fit(){ const f=floorMeta[currentFloorIdx]; const z=Math.min(VW/f.pageW,
   view.panX=(VW-f.pageW*z)/2; view.panY=(VH-f.pageH*z)/2; }
 
 function draw(printMode){
+  syncDuctAttachments();
   ctx.clearRect(0,0,VW,VH);
   const _f=floorMeta[currentFloorIdx];
   if(img.complete && img.naturalWidth) ctx.drawImage(img, view.panX, view.panY, _f.pageW*view.zoom, _f.pageH*view.zoom);
@@ -1331,6 +1393,10 @@ function finishDuctDraw(){
     const d={id:nextDuctRunId++, system:activeType, form:'auto', points:draft.slice(), cfm:null,
       width_in:null, height_in:null, diameter_in:null, zone:null, auto:true};
     ductRuns.push(d); selDuctKind='run'; selDuctId=d.id; selDuctVertex=null;
+    // If either end landed on an existing run's mid-span, record that as a proper attachment
+    // (not just a coincidental shared point) so dragging the parent trunk carries this along.
+    const tee=findTeePoint(d);
+    if(tee){ const a=attachTo(tee.onRun, tee.point); if(a){ if(tee.end==='start') d.startOn=a; else d.endOn=a; } }
   }
   // Stay armed in draw_duct mode ("pick the pen up, keep drawing") instead of dropping back
   // to select — lets a whole branching system (trunk + branches) be drawn in one continuous
@@ -1346,9 +1412,8 @@ function bulkAttachTo(run){
     const t=ductTerminals.find(x=>x.id===id);
     if(!t) return;
     if((t.kind.indexOf('supply')>=0)!==(run.system==='supply')){ skipped++; return; }
-    let best=null;
-    for(let i=0;i<run.points.length-1;i++){ const cs=closestOnSeg(t.point,run.points[i],run.points[i+1]); if(!best||cs.dist<best.dist) best=cs; }
-    ductRuns.push({id:nextDuctRunId++, system:run.system, form:'auto', points:[best.point,t.point], width_in:null, height_in:null, diameter_in:null, cfm:null, zone:null, auto:true});
+    const a=attachTo(run,t.point), pt=resolveAttach(a);
+    ductRuns.push({id:nextDuctRunId++, system:run.system, form:'auto', points:[pt,t.point], width_in:null, height_in:null, diameter_in:null, cfm:null, zone:null, auto:true, startOn:a});
     attached++;
   });
   pendingAttachIds.clear();
@@ -1360,9 +1425,16 @@ function bulkAttachTo(run){
 // Both pieces start as a copy of the parent (same system/form/cfm/size) — the point is to
 // let the user then force either piece's Form independently, not to change anything yet.
 function splitDuctRun(run, i){
-  const twin = Object.assign({}, run, {id: nextDuctRunId++, points: run.points.slice(i)});
-  run.points = run.points.slice(0, i+1);
+  const candidateRuns=[run];
+  const resume=beginTopologyChange(run, candidateRuns);   // snapshot dependents before points.length changes
+  const origPoints=run.points, oldEndOn=run.endOn;
+  run.points = origPoints.slice(0, i+1);
+  run.endOn = null;   // run's old far end (whatever it used to attach to) now belongs to twin
+  const twin = Object.assign({}, run, {id: nextDuctRunId++, points: origPoints.slice(i),
+    startOn: {runId:run.id, seg:run.points.length-2, t:1}, endOn: oldEndOn||null});
+  candidateRuns.push(twin);
   ductRuns.push(twin);
+  resume();   // re-derive every affected dependent's onRun/startOn/endOn against [run,twin]
   selDuctKind='run'; selDuctId=run.id; selDuctVertex=null;
   renderSide(); draw();
 }
@@ -1759,14 +1831,14 @@ cv.addEventListener('mousedown', e=>{
       if(paintCat==='window'){ Object.assign(op,{overhang_proj:0,overhang_sep:0,shaded:false}); }
       openings.push(op); selOpening=opId; opId++; selected=null; draw(); renderSide(); return; } }
     else if(paintCat==='terminal'){
-      const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
-      const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null, auto:true};
+      const near=nearestDuctPoint(wp), snapped=near&&near.dist*view.zoom<12, pt=snapped?near.point:[wp[0],wp[1]];
+      const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null, auto:true, onRun:(snapped&&near.run)?attachTo(near.run,pt):null};
       ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; draw(); renderSide(); return;
     }
     else if(paintCat==='equip'){
-      const near=nearestDuctPoint(wp), pt=(near&&near.dist*view.zoom<12)?near.point:[wp[0],wp[1]];
+      const near=nearestDuctPoint(wp), snapped=near&&near.dist*view.zoom<12, pt=snapped?near.point:[wp[0],wp[1]];
       const n=ductEquipment.filter(x=>x.kind===activeType).length+1;
-      const eq={id:nextEquipId++, kind:activeType, point:pt, label:activeType+'-'+n, zone:null};
+      const eq={id:nextEquipId++, kind:activeType, point:pt, label:activeType+'-'+n, zone:null, onRun:(snapped&&near.run)?attachTo(near.run,pt):null};
       ductEquipment.push(eq); selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; draw(); renderSide(); return;
     }
     else if(paintCat==='ductrun'){ /* placed via the "Draw Run" button + draw_duct mode below, not a direct click */ }
@@ -1789,23 +1861,48 @@ cv.addEventListener('mousedown', e=>{
       if(selRun){
         for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]);
           if(Math.hypot(s[0]-mx,s[1]-my)<9){
-            if(e.altKey){ if(selRun.points.length>2) selRun.points.splice(i,1); selDuctVertex=null; renderSide(); draw(); }
+            if(e.altKey){
+              // Alt-deleting the run's own attached endpoint is an implicit, permanent detach too —
+              // otherwise syncDuctAttachments() would resurrect the deleted point next frame.
+              if(i===0 && selRun.startOn) selRun.startOn=null;
+              if(i===selRun.points.length-1 && selRun.endOn) selRun.endOn=null;
+              const resume=beginTopologyChange(selRun); if(selRun.points.length>2) selRun.points.splice(i,1); resume(); selDuctVertex=null; renderSide(); draw();
+            }
             else if(e.shiftKey && i>0 && i<selRun.points.length-1) splitDuctRun(selRun,i);
-            else { drag={type:'ductvertex',run:selRun,vi:i}; selDuctVertex=i; }
+            else {
+              // Grabbing your own attached tip to reshape it is an implicit, permanent detach —
+              // otherwise syncDuctAttachments() would snap it right back on the next frame.
+              if(i===0 && selRun.startOn) selRun.startOn=null;
+              if(i===selRun.points.length-1 && selRun.endOn) selRun.endOn=null;
+              drag={type:'ductvertex',run:selRun,vi:i}; selDuctVertex=i;
+            }
             return; } }
         // edge midpoint: insert a new point there (open polyline — no wraparound past the last point)
         for(let i=0;i<selRun.points.length-1;i++){ const a=selRun.points[i], b=selRun.points[i+1], m=w2s([(a[0]+b[0])/2,(a[1]+b[1])/2]);
-          if(Math.hypot(m[0]-mx,m[1]-my)<8){ selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); drag={type:'ductvertex',run:selRun,vi:i+1}; selDuctVertex=i+1; renderSide(); draw(); return; } }
+          if(Math.hypot(m[0]-mx,m[1]-my)<8){ const resume=beginTopologyChange(selRun); selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); resume(); drag={type:'ductvertex',run:selRun,vi:i+1}; selDuctVertex=i+1; renderSide(); draw(); return; } }
       }
     }
     for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k]; const s=w2s(t.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){
       if(e.ctrlKey||e.metaKey){ if(pendingAttachIds.has(t.id)) pendingAttachIds.delete(t.id); else pendingAttachIds.add(t.id); renderSide(); draw(); return; }
+      if(e.shiftKey) t.onRun=null;   // explicit, permanent detach
       selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:t,followRun:e.shiftKey?null:vertexUnder(t.point)}; renderSide(); draw(); return; } }
-    for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){ selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:eq,followRun:e.shiftKey?null:vertexUnder(eq.point)}; renderSide(); draw(); return; } }
+    for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){
+      if(e.shiftKey) eq.onRun=null;   // explicit, permanent detach
+      selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:eq,followRun:e.shiftKey?null:vertexUnder(eq.point)}; renderSide(); draw(); return; } }
     for(let k=ductRuns.length-1;k>=0;k--){ const d=ductRuns[k]; for(let i=0;i<d.points.length-1;i++){
       if(segDist(wp,d.points[i],d.points[i+1])*view.zoom<8){
         if(pendingAttachIds.size>0) bulkAttachTo(d);
-        selDuctKind='run'; selDuctId=d.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductrun',run:d,last:wp,attached:e.shiftKey?[]:runAttachments(d)}; renderSide(); draw(); return; } } }
+        if(e.shiftKey){
+          // Explicit, permanent detach of every current dependent — a subsequent normal drag
+          // of this run must NOT pull them back along with it.
+          ductTerminals.forEach(t=>{ if(t.onRun && t.onRun.runId===d.id) t.onRun=null; });
+          ductEquipment.forEach(eq=>{ if(eq.onRun && eq.onRun.runId===d.id) eq.onRun=null; });
+          ductRuns.forEach(r=>{ if(r.startOn && r.startOn.runId===d.id) r.startOn=null; if(r.endOn && r.endOn.runId===d.id) r.endOn=null; });
+        }
+        // If this run itself tees off some other trunk, a whole-run translate detaches it from
+        // that parent too — otherwise the next syncDuctAttachments() would snap it right back.
+        d.startOn=null; d.endOn=null;
+        selDuctKind='run'; selDuctId=d.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductrun',run:d,last:wp}; renderSide(); draw(); return; } } }
   }
   const sel=rooms.find(r=>r.id===selected);
   if(sel){
@@ -1833,14 +1930,18 @@ window.addEventListener('mousemove', e=>{
   else if(drag.type==='vertex'){ drag.room.points[drag.vi]=[wp[0],wp[1]]; if(tab==='rooms') renderSide(); }
   else if(drag.type==='room'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1]; drag.room.points=drag.room.points.map(p=>[p[0]+dx,p[1]+dy]); drag.last=wp; if(tab==='rooms') renderSide(); }
   else if(drag.type==='opening'){ const o=drag.op, r=rooms.find(x=>x.id===o.rid); if(r) o.t=edgeParam(r,o.edge,wp); }
-  else if(drag.type==='ductpoint'){ drag.item.point=[wp[0],wp[1]]; if(drag.followRun) drag.followRun.run.points[drag.followRun.vi]=[wp[0],wp[1]]; }
+  else if(drag.type==='ductpoint'){ drag.item.point=[wp[0],wp[1]];
+    if(drag.followRun) drag.followRun.run.points[drag.followRun.vi]=[wp[0],wp[1]];
+    // Still attached (and not the legacy exact-vertex handle above) — keep sliding along the
+    // same run, mirroring how an opening drag stays glued to its own wall edge (o.t=edgeParam(...)).
+    else if(drag.item.onRun){ const r=ductRuns.find(x=>x.id===drag.item.onRun.runId); if(r) drag.item.onRun=attachTo(r,wp)||drag.item.onRun; }
+  }
   else if(drag.type==='ductvertex'){ drag.run.points[drag.vi]=[wp[0],wp[1]]; }
   else if(drag.type==='ductrun'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1];
+    // Pure rigid translate — every remaining dependent still has onRun/startOn/endOn pointing
+    // at this run, so syncDuctAttachments() recomputes its position on the next draw() (covers
+    // vertex-reshape/straighten too, unlike the old snapshot-and-replay-the-same-delta approach).
     drag.run.points=drag.run.points.map(p=>[p[0]+dx,p[1]+dy]);
-    (drag.attached||[]).forEach(a=>{
-      if(a.kind==='run'){ const i=a.end==='start'?0:a.item.points.length-1; a.item.points[i]=[a.item.points[i][0]+dx,a.item.points[i][1]+dy]; }
-      else a.item.point=[a.item.point[0]+dx,a.item.point[1]+dy];
-    });
     drag.last=wp; }
   else if(drag.type==='measure'){ ruler.b=wp; }
   draw();
@@ -1851,7 +1952,11 @@ cv.addEventListener('click', e=>{ if((mode!=='draw'&&mode!=='draw_duct')||e.deta
 cv.addEventListener('dblclick', e=>{ if(mode==='draw'){ e.preventDefault(); finishDraw(); } else if(mode==='draw_duct'){ e.preventDefault(); finishDuctDraw(); } });
 cv.addEventListener('contextmenu', e=>{ e.preventDefault();
   if(tab==='ducts' && selDuctKind==='run'){ const selRun=ductRuns.find(d=>d.id===selDuctId); if(!selRun||paintCat) return; const [mx,my]=rel(e);
-    for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(selRun.points.length>2) selRun.points.splice(i,1); selDuctVertex=null; renderSide(); draw(); return; } } return; }
+    for(let i=0;i<selRun.points.length;i++){ const s=w2s(selRun.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){
+      if(i===0 && selRun.startOn) selRun.startOn=null;
+      if(i===selRun.points.length-1 && selRun.endOn) selRun.endOn=null;
+      const resume=beginTopologyChange(selRun); if(selRun.points.length>2) selRun.points.splice(i,1); resume();
+      selDuctVertex=null; renderSide(); draw(); return; } } return; }
   const sel=rooms.find(r=>r.id===selected); if(!sel||paintCat) return; const [mx,my]=rel(e);
   for(let i=0;i<sel.points.length;i++){ const s=w2s(sel.points[i]); if(Math.hypot(s[0]-mx,s[1]-my)<9){ if(sel.points.length>3){ sel.points.splice(i,1); sel.walls.splice(i,1); renderSide(); draw(); } return; } } });
 window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ setMode('select'); paintCat=null; activeType=null; hoverEdge=null; ruler=null; editingType=null; cv.classList.remove('paint'); selected=null; selOpening=null; selDuctKind=null; selDuctId=null; selDuctVertex=null; renderSide(); draw(); }
@@ -1946,6 +2051,7 @@ document.getElementById('bMatchSqft').onclick=()=>{
   rescaleToTotalSqft(target);
 };
 function buildPayload(){
+  syncDuctAttachments();   // belt-and-suspenders: the saved JSON's points/point are always fully resolved
   // Stash the active floor's live edits back before flattening every floor — otherwise
   // whatever floor is on-screen right now would be saved from a stale snapshot.
   floorRoomsMap.set(floorMeta[currentFloorIdx].level, rooms);
