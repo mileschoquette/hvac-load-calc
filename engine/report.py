@@ -11,11 +11,18 @@ Requirements and a Duct/Diffuser Schedule ARE included (see `_supply_air`/
 """
 from __future__ import annotations
 
+import re
+
 from .coeffs import mass_from_construction
 from .compute import DEFAULT_SAFETY_FACTORS
 
 MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
+
+
+def _slug(text):
+    """Anchor id for a section heading, derived from its title text."""
+    return "sec-" + re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 def _ft_in(ft):
@@ -45,7 +52,7 @@ def _hour12(hour_1_24):
 
 def _table(main_header, col_count, subtitle=None, col_headers=None, rows=""):
     title = main_header if not subtitle else f"{main_header}<br><span class='regularSize'>{subtitle}</span>"
-    head = f"<th colspan='{col_count}' class='mainHeader'>{title}</th>"
+    head = f"<th colspan='{col_count}' class='mainHeader' id='{_slug(main_header)}'>{title}</th>"
     cols = ("<tr>" + "".join(f"<th class='otherHeader'>{c}</th>" for c in col_headers) + "</tr>") if col_headers else ""
     body = rows if rows.strip() else f"<tr><td class='otherData' colspan='{col_count}'><i>none</i></td></tr>"
     return f"<table><thead><tr>{head}</tr>{cols}</thead>{body}</table>"
@@ -99,7 +106,8 @@ def _project_info(design, project_name, generated, building):
         f"{MONTHS[building['peak_month']]}, {_hour12(building['peak_hour'])} — {building['tons']:,.1f} tons "
         f"({building['total_btuh']:,.0f} Btu/h, {building['area_sqft']:,.0f} ft²)</td></tr>",
     ])
-    return f"<table><thead><tr><th colspan='4' class='mainHeader'>Project Information</th></tr></thead>{rows}</table>"
+    return (f"<table><thead><tr><th colspan='4' class='mainHeader' id='{_slug('Project Information')}'>"
+            f"Project Information</th></tr></thead>{rows}</table>")
 
 
 def _types_table(title, types, category):
@@ -279,7 +287,8 @@ def _air_balance(ab):
         "<tr><th class='project'>Net Building Pressurization:</th>"
         f"<td class='otherData' colspan='3'><b>{net:,.0f} CFM — {status}</b></td></tr>"
     )
-    summary = (f"<table><thead><tr><th colspan='4' class='mainHeader'>"
+    summary = (f"<table><thead><tr><th colspan='4' class='mainHeader' "
+               f"id='{_slug('Air Balance — Building Pressurization')}'>"
                f"Air Balance — Building Pressurization</th></tr></thead>{summary_rows}</table>")
 
     zones_table = ""
@@ -390,11 +399,12 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
             "building calibration validated against ASHRAE's own AHU-1/AHU-2 first-floor/second-floor "
             "example) — a floor's peak hour may differ from any single room's or the whole building's.")
 
-    plan = (f"<table><thead><tr><th class='mainHeader'>Reviewed Floor Plan</th></tr></thead>"
+    plan = (f"<table><thead><tr><th class='mainHeader' id='{_slug('Reviewed Floor Plan')}'>"
+            f"Reviewed Floor Plan</th></tr></thead>"
             f"<tr><td class='otherData' style='text-align:center'>"
             f"<img class='report-img' src='{plan_datauri}' style='max-width:100%'></td></tr></table>") if plan_datauri else ""
 
-    duct_plan = (f"<table><thead><tr><th class='mainHeader'>Duct Plan</th></tr></thead>"
+    duct_plan = (f"<table><thead><tr><th class='mainHeader' id='{_slug('Duct Plan')}'>Duct Plan</th></tr></thead>"
             f"<tr><td class='otherData' style='text-align:center'>"
             f"<img class='report-img' src='{duct_plan_datauri}' style='max-width:100%'></td></tr></table>"
             f"<p class='note'>Double-line outline = rigid trunk (rectangular or round), sized to true width. "
@@ -411,28 +421,67 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
     sf_footnote = _safety_factor_footnote(d)
 
     sections = [
-        _project_info(d, project_name, generated, b),
-        _types_table("Roof Types", types.get("roof", []), "roof"),
-        _usage_table("Roofs", envelope, "roof"),
-        _types_table("Wall Types", types.get("wall", []), "wall"),
-        _usage_table("Walls", envelope, "wall", extra_cols=[("Length", "length_ft"), ("Height", "height_ft")]),
-        _types_table("Door Types", types.get("door", []), "door"),
-        _usage_table("Doors", envelope, "door"),
-        _types_table("Glass Types", types.get("glass", []), "window"),
-        _usage_table("Glass", envelope, "window"),
-        _room_info(rooms),
-        ventilation_schedule_section,
-        _cooling_detail(rooms, d["month"]),
-        _heating_detail(rooms, d["heating_db"]),
-        supply_air_section,
-        _load_summary("Load Total Summary — Room (Building)", building_row),
-        zones_section,
-        floors_section,
-        air_balance_section,
-        duct_plan,
-        duct_schedule_section,
-        plan,
+        ("Project Information", _project_info(d, project_name, generated, b)),
+        ("Roof Types", _types_table("Roof Types", types.get("roof", []), "roof")),
+        ("Roofs", _usage_table("Roofs", envelope, "roof")),
+        ("Wall Types", _types_table("Wall Types", types.get("wall", []), "wall")),
+        ("Walls", _usage_table("Walls", envelope, "wall", extra_cols=[("Length", "length_ft"), ("Height", "height_ft")])),
+        ("Door Types", _types_table("Door Types", types.get("door", []), "door")),
+        ("Doors", _usage_table("Doors", envelope, "door")),
+        ("Glass Types", _types_table("Glass Types", types.get("glass", []), "window")),
+        ("Glass", _usage_table("Glass", envelope, "window")),
+        ("Room Information", _room_info(rooms)),
+        ("Ventilation Schedule", ventilation_schedule_section),
+        ("Cooling Load Details — Room", _cooling_detail(rooms, d["month"])),
+        ("Heating Load Details — Room", _heating_detail(rooms, d["heating_db"])),
+        ("Supply Air Requirements", supply_air_section),
+        ("Load Total Summary — Room (Building)", _load_summary("Load Total Summary — Room (Building)", building_row)),
+        ("Load Total Summary — Zones", zones_section),
+        ("Load Total Summary — Floors", floors_section),
+        ("Air Balance — Building Pressurization", air_balance_section),
+        ("Duct Plan", duct_plan),
+        ("Duct Schedule", duct_schedule_section),
+        ("Reviewed Floor Plan", plan),
     ]
+    sections = [(title, html) for title, html in sections if html]
+
+    # substantial sections worth starting a fresh printed page for (short header-only
+    # sections aren't) — see plan item 6
+    major_break = {"Room Information", "Cooling Load Details — Room", "Heating Load Details — Room",
+                   "Load Total Summary — Room (Building)", "Duct Plan"}
+    sections_html = "<hr class='pagebreak'>".join(
+        f"<div class=\"{'section-break' if title in major_break else 'section'}\">{html}</div>"
+        for title, html in sections)
+
+    ducts = result.get("ducts") or {}
+    # (TOC label, present?, section title used to derive the matching #anchor)
+    toc_items = [
+        ("Project Information", True, "Project Information"),
+        ("Roof Types", True, "Roof Types"),
+        ("Roofs", True, "Roofs"),
+        ("Wall Types", True, "Wall Types"),
+        ("Walls", True, "Walls"),
+        ("Door Types", True, "Door Types"),
+        ("Doors", True, "Doors"),
+        ("Glass Types", True, "Glass Types"),
+        ("Glass", True, "Glass"),
+        ("Room Information", True, "Room Information"),
+        ("Ventilation Schedule", bool(ventilation_schedule_section), "Ventilation Schedule"),
+        ("Cooling Load Details", True, "Cooling Load Details — Room"),
+        ("Heating Load Details", True, "Heating Load Details — Room"),
+        ("Supply Air Requirements", bool(supply_air_section), "Supply Air Requirements"),
+        ("Load Total Summary — Building", True, "Load Total Summary — Room (Building)"),
+        ("Load Total Summary — Zones", bool(zones_section), "Load Total Summary — Zones"),
+        ("Load Total Summary — Floors", bool(floors_section), "Load Total Summary — Floors"),
+        ("Air Balance", bool(air_balance_section), "Air Balance — Building Pressurization"),
+        ("Duct Plan", bool(duct_plan), "Duct Plan"),
+        ("Air Handling Equipment", bool(ducts.get("equipment")), "Air Handling Equipment"),
+        ("Duct Schedule", bool(duct_schedule_section), "Duct Schedule"),
+        ("Diffuser / Grille Schedule", bool(duct_schedule_section), "Diffuser / Grille Schedule"),
+        ("Reviewed Floor Plan", bool(plan), "Reviewed Floor Plan"),
+    ]
+    toc_html = " &middot; ".join(f"<a href='#{_slug(src)}' style='color:#000'>{label}</a>"
+                                  for label, present, src in toc_items if present)
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{project_name or 'Load Calc'} — Cooling &amp; Heating Loads</title>
@@ -458,11 +507,13 @@ def render_report(result, project_name="", plan_datauri=None, duct_plan_datauri=
     tr {{ page-break-inside: avoid; }}
     table {{ page-break-inside: avoid; }}
     img.report-img {{ max-width: 100%; height: auto; }}
+    .section-break {{ page-break-before: always; break-before: page; }}
   }}
 </style></head><body>
   <h1>Cooling &amp; Heating Load Results{(' — ' + project_name) if project_name else ''}</h1>
   <button class="print-btn no-print" onclick="window.print()">&#128424; Print / Save as PDF</button>
   <p class="sub">ASHRAE Handbook-Fundamentals Ch.18 · cooling: Radiant Time Series, peak {MONTHS[b['peak_month']]} {_hour12(b['peak_hour'])} · heating: steady-state, {d['heating_db']:.0f}°F design{(' · generated ' + generated) if generated else ''}</p>
-  {"<hr class='pagebreak'>".join(sections)}
+  <p class="sub">{toc_html}</p>
+  {sections_html}
   {sf_footnote}
 </body></html>"""
