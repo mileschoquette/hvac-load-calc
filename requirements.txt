@@ -4,6 +4,7 @@
 # --- Runtime (needed to run app.py / loadcalc.py) ---
 pymupdf>=1.27.2      # PDF vector/text extraction (imported as `fitz`) — parser/pdf_extractor.py, export_review.py, loadcalc.py
 shapely>=2.1.2        # polygon geometry for room-building — parser/room_builder.py, parser/models.py
+ezdxf>=1.4             # AutoCAD DXF export — engine/dxf_export.py
 
 # --- Test suite only (tests/*.py, validation/extract_golden.py) ---
 # Reads the bundled ASHRAE RTS *.xls workbooks for golden-value validation.

@@ -3,3 +3,17 @@ __pycache__/
 .DS_Store
 .Rhistory
 dev_archive/
+
+# Client drawings and anything derived from them. Never commit these.
+sample_drawings/
+*.pdf
+*.dxf
+*.dwg
+
+# Per-project outputs land in the repo root: loadcalc_input.json, rooms_edited.json,
+# "<pdf stem>.json", plan.png, results.html, review.html. All regenerated per run.
+# Keepers (weather/stations.json, validation/*.json, .claude/*.json) live in subdirs.
+/*.json
+plan.png
+/results.html
+/review.html

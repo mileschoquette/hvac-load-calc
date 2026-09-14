@@ -47,6 +47,7 @@ sys.path.insert(0, str(ROOT))
 import export_review
 from engine.compute import compute_building
 from engine.ducts import size_duct_network, duct_report_data
+from engine.dxf_export import export_ducts_dxf
 from engine.report import render_report
 
 
@@ -377,6 +378,13 @@ class ReviewHandler(SimpleHTTPRequestHandler):
             print(f"sized ducts from the browser -> {len(sized['duct_runs'])} runs, "
                   f"{len(sized['duct_terminals'])} terminals, {len(sized['duct_equipment'])} air handlers")
             self._json({"ok": True, **sized})
+        elif self.path == "/api/export_dxf":
+            try:
+                paths = export_ducts_dxf(review, ROOT)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+            self._json({"ok": True, "files": [p.name for p in paths]})
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 

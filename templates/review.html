@@ -121,6 +121,7 @@
     <span class="bar-sep"></span>
     <button id="bSave" title="Save the current rooms/ducts/settings to rooms_edited.json">Save JSON</button>
     <button id="bRunCalc" class="primary" title="Run the load calculation and generate the report">▶ Run Load Calc</button>
+    <button id="bExportDxf" title="Export ductwork to a DXF file per floor, for xref into AutoCAD">Export DXF</button>
     <span class="bar-sep"></span>
     <span class="sp"></span>
     <span class="ruler-stat" id="rulerStat"></span>
@@ -343,7 +344,12 @@ const PALETTE = ['#ef4444','#f59e0b','#8b5cf6','#0ea5e9','#ec4899','#14b8a6','#8
 const DUCT_RUN_KINDS = [['supply','Supply Duct'],['return','Return Duct']];
 const DUCT_FORM_OPTS = [['auto','Auto'],['rect','Rectangular'],['round','Round'],['flex','Flexible']];
 const TERMINAL_KINDS = [['ceiling_supply','Ceiling Supply Diffuser'],['ceiling_return','Ceiling Return'],
-  ['sidewall_supply','Sidewall Supply'],['sidewall_return','Sidewall Return']];
+  ['sidewall_supply','Sidewall Supply'],['sidewall_return','Sidewall Return'],
+  ['linear_supply','Linear Slot Diffuser (Supply)'],['linear_return','Linear Slot Diffuser (Return)']];
+// Linear slot diffuser real-world dimensions — drawn true-to-scale (drag defines its actual
+// length/orientation), unlike the fixed-screen-size point icons in drawTerminalIcon.
+const LINEAR_DIFF_WIDTH_IN = 4;
+const LINEAR_DIFF_BLADE_SPACING_IN = 3;
 const EQUIPMENT_KINDS = [['AH','Air Handler'],['CU','Condensing Unit'],['DH','Dehumidifier']];
 let selDuctKind=null, selDuctId=null;   // currently selected placed duct item (for its property form) — kind is 'run'|'terminal'|'equip'
 let selDuctVertex=null;   // for kind==='run': index of the last-touched vertex on that run, used as the pivot for the Straighten Next/Previous tool below
@@ -663,6 +669,29 @@ function drawTerminalIcon(t, on, pending){
   const label=[t.size,t.cfm!=null?t.cfm+' cfm':''].filter(Boolean).join(' · ');
   if(label){ ctx.fillStyle='#111827'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(label, s[0], s[1]+sz+11); }
 }
+function drawLinearDiffuserIcon(a, b, kind, on){
+  // Linear slot diffuser: unlike the fixed-screen-size point icons above, this is drawn
+  // true-to-scale off the two real placed endpoints — a rectangular frame at the standard
+  // throat width, with perpendicular blade ticks at a standard on-center spacing (a generic
+  // linear-diffuser CAD symbol, not a clone of any one manufacturer's blade styling).
+  const lenIn=Math.hypot(b[0]-a[0],b[1]-a[1])/PPF*12;   // real length, independent of zoom
+  const sA=w2s(a), sB=w2s(b);
+  const sux=(sB[0]-sA[0]), suy=(sB[1]-sA[1]), slen=Math.hypot(sux,suy)||1e-9;
+  const sPx=-suy/slen, sPy=sux/slen, sHalfW=inToPx(LINEAR_DIFF_WIDTH_IN)/2;
+  const col = on ? '#111827' : (kind.indexOf('supply')>=0 ? '#1d4ed8' : '#15803d');
+  ctx.strokeStyle=col; ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=1.5;
+  const corners=[[sA[0]+sPx*sHalfW,sA[1]+sPy*sHalfW],[sB[0]+sPx*sHalfW,sB[1]+sPy*sHalfW],
+                 [sB[0]-sPx*sHalfW,sB[1]-sPy*sHalfW],[sA[0]-sPx*sHalfW,sA[1]-sPy*sHalfW]];
+  ctx.beginPath(); corners.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.fill(); ctx.stroke();
+  const bladeCount=Math.max(3, Math.round(lenIn/LINEAR_DIFF_BLADE_SPACING_IN)+1);
+  ctx.beginPath();
+  for(let i=0;i<bladeCount;i++){
+    const t=bladeCount>1 ? i/(bladeCount-1) : 0.5;
+    const cx=sA[0]+sux*t, cy=sA[1]+suy*t;
+    ctx.moveTo(cx+sPx*sHalfW,cy+sPy*sHalfW); ctx.lineTo(cx-sPx*sHalfW,cy-sPy*sHalfW);
+  }
+  ctx.stroke();
+}
 function drawEquipmentIcon(eq, on){
   // Square = air handler / dehumidifier, circle = condensing unit — matches the reference.
   const s=w2s(eq.point), sz=13;
@@ -874,7 +903,11 @@ function draw(printMode){
     const on=(selDuctKind==='run'&&selDuctId===d.id);
     if(effectiveForm(d)==='flex') drawFlexRun(d,on); else drawHardRun(d,on);
   });
-  ductTerminals.forEach(t=>drawTerminalIcon(t, selDuctKind==='terminal'&&selDuctId===t.id, pendingAttachIds.has(t.id)));
+  ductTerminals.forEach(t=>{
+    const on=selDuctKind==='terminal'&&selDuctId===t.id;
+    if(t.points) drawLinearDiffuserIcon(t.points[0], t.points[1], t.kind, on);
+    else drawTerminalIcon(t, on, pendingAttachIds.has(t.id));
+  });
   ductEquipment.forEach(eq=>drawEquipmentIcon(eq, selDuctKind==='equip'&&selDuctId===eq.id));
   // Vertex handles — every point of the selected run, same visual language AND same edit
   // gestures as a room's corners: drag to move, alt-click (or right-click) to delete,
@@ -909,6 +942,7 @@ function draw(printMode){
     if(ductPreviewPt){ const last=sp[sp.length-1], pp=w2s(ductPreviewPt);
       ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(pp[0],pp[1]); ctx.strokeStyle='#93c5fd'; ctx.lineWidth=1.5; ctx.stroke(); ctx.setLineDash([]); } }
   if(hoverDuctSnap){ const hp=w2s(hoverDuctSnap); ctx.beginPath(); ctx.arc(hp[0],hp[1],7,0,7); ctx.strokeStyle='#f97316'; ctx.lineWidth=2; ctx.stroke(); }
+  if(drag && drag.type==='linear_terminal'){ drawLinearDiffuserIcon(drag.a, drag.b, drag.kind, true); }
   if(ruler){
     const distFt=Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1])/PPF;
     const s1=w2s(ruler.a), s2=w2s(ruler.b);
@@ -1648,6 +1682,12 @@ cv.addEventListener('mousedown', e=>{
       if(paintCat==='window'){ Object.assign(op,{overhang_proj:0,overhang_sep:0,shaded:false}); }
       openings.push(op); selOpening=opId; opId++; selected=null; draw(); renderSide(); return; } }
     else if(paintCat==='terminal'){
+      if(activeType==='linear_supply'||activeType==='linear_return'){
+        // Linear slot diffuser: drawn true-to-scale by dragging out its actual length/
+        // orientation (like the measure ruler), not placed by a single click — see the
+        // 'linear_terminal' drag handling in mousemove/mouseup below.
+        drag={type:'linear_terminal', a:[wp[0],wp[1]], b:[wp[0],wp[1]], kind:activeType}; draw(); return;
+      }
       const near=nearestDuctPoint(wp), snapped=near&&near.dist*view.zoom<12, pt=snapped?near.point:[wp[0],wp[1]];
       const t={id:nextTerminalId++, kind:activeType, point:pt, cfm:null, size:null, zone:null, auto:true, onRun:(snapped&&near.run)?attachTo(near.run,pt):null};
       ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; draw(); renderSide(); return;
@@ -1699,10 +1739,15 @@ cv.addEventListener('mousedown', e=>{
           if(Math.hypot(m[0]-mx,m[1]-my)<8){ const resume=beginTopologyChange(selRun); selRun.points.splice(i+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]); resume(); drag={type:'ductvertex',run:selRun,vi:i+1}; selDuctVertex=i+1; renderSide(); draw(); return; } }
       }
     }
-    for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k]; const s=w2s(t.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){
+    for(let k=ductTerminals.length-1;k>=0;k--){ const t=ductTerminals[k];
+      // A linear diffuser spans real distance, not just its midpoint — hit-test the whole
+      // drawn segment (like a duct run's own body-drag hit-test) instead of only t.point.
+      const hit = t.points ? segDist([mx,my], w2s(t.points[0]), w2s(t.points[1]))<10
+                            : Math.hypot(w2s(t.point)[0]-mx, w2s(t.point)[1]-my)<10;
+      if(hit){
       if(e.ctrlKey||e.metaKey){ if(pendingAttachIds.has(t.id)) pendingAttachIds.delete(t.id); else pendingAttachIds.add(t.id); renderSide(); draw(); return; }
       if(e.shiftKey) t.onRun=null;   // explicit, permanent detach
-      selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:t,followRun:e.shiftKey?null:vertexUnder(t.point)}; renderSide(); draw(); return; } }
+      selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:t,last:wp,followRun:e.shiftKey?null:vertexUnder(t.point)}; renderSide(); draw(); return; } }
     for(let k=ductEquipment.length-1;k>=0;k--){ const eq=ductEquipment[k]; const s=w2s(eq.point); if(Math.hypot(s[0]-mx,s[1]-my)<10){
       if(e.shiftKey) eq.onRun=null;   // explicit, permanent detach
       selDuctKind='equip'; selDuctId=eq.id; selDuctVertex=null; selected=null; selOpening=null; drag={type:'ductpoint',item:eq,followRun:e.shiftKey?null:vertexUnder(eq.point)}; renderSide(); draw(); return; } }
@@ -1747,11 +1792,23 @@ window.addEventListener('mousemove', e=>{
   else if(drag.type==='vertex'){ drag.room.points[drag.vi]=[wp[0],wp[1]]; if(tab==='rooms') renderSide(); }
   else if(drag.type==='room'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1]; drag.room.points=drag.room.points.map(p=>[p[0]+dx,p[1]+dy]); drag.last=wp; if(tab==='rooms') renderSide(); }
   else if(drag.type==='opening'){ const o=drag.op, r=rooms.find(x=>x.id===o.rid); if(r) o.t=edgeParam(r,o.edge,wp); }
-  else if(drag.type==='ductpoint'){ drag.item.point=[wp[0],wp[1]];
-    if(drag.followRun) drag.followRun.run.points[drag.followRun.vi]=[wp[0],wp[1]];
-    // Still attached (and not the legacy exact-vertex handle above) — keep sliding along the
-    // same run, mirroring how an opening drag stays glued to its own wall edge (o.t=edgeParam(...)).
-    else if(drag.item.onRun){ const r=ductRuns.find(x=>x.id===drag.item.onRun.runId); if(r) drag.item.onRun=attachTo(r,wp)||drag.item.onRun; }
+  else if(drag.type==='ductpoint'){
+    if(drag.item.points){
+      // A linear diffuser has real length/orientation (its two placed endpoints) — snapping
+      // a single point to the cursor like below would collapse/distort it, so translate both
+      // endpoints by the per-frame delta instead, same technique as dragging a whole room/run.
+      const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1];
+      drag.item.points=[[drag.item.points[0][0]+dx,drag.item.points[0][1]+dy],
+                         [drag.item.points[1][0]+dx,drag.item.points[1][1]+dy]];
+      drag.item.point=[(drag.item.points[0][0]+drag.item.points[1][0])/2,(drag.item.points[0][1]+drag.item.points[1][1])/2];
+      drag.last=wp;
+    } else {
+      drag.item.point=[wp[0],wp[1]];
+      if(drag.followRun) drag.followRun.run.points[drag.followRun.vi]=[wp[0],wp[1]];
+      // Still attached (and not the legacy exact-vertex handle above) — keep sliding along the
+      // same run, mirroring how an opening drag stays glued to its own wall edge (o.t=edgeParam(...)).
+      else if(drag.item.onRun){ const r=ductRuns.find(x=>x.id===drag.item.onRun.runId); if(r) drag.item.onRun=attachTo(r,wp)||drag.item.onRun; }
+    }
   }
   else if(drag.type==='ductvertex'){ drag.run.points[drag.vi]=[wp[0],wp[1]]; }
   else if(drag.type==='ductrun'){ const dx=wp[0]-drag.last[0], dy=wp[1]-drag.last[1];
@@ -1761,9 +1818,19 @@ window.addEventListener('mousemove', e=>{
     drag.run.points=drag.run.points.map(p=>[p[0]+dx,p[1]+dy]);
     drag.last=wp; }
   else if(drag.type==='measure'){ ruler.b=wp; }
+  else if(drag.type==='linear_terminal'){ drag.b=wp; }
   draw();
 });
-window.addEventListener('mouseup', ()=>{ drag=null; });
+window.addEventListener('mouseup', ()=>{
+  if(drag && drag.type==='linear_terminal'){
+    const mid=[(drag.a[0]+drag.b[0])/2,(drag.a[1]+drag.b[1])/2];
+    const near=nearestDuctPoint(mid), snapped=near&&near.dist*view.zoom<12;
+    const t={id:nextTerminalId++, kind:drag.kind, points:[drag.a,drag.b], point:mid,
+             cfm:null, size:null, zone:null, auto:true, onRun:(snapped&&near.run)?attachTo(near.run,mid):null};
+    ductTerminals.push(t); selDuctKind='terminal'; selDuctId=t.id; selDuctVertex=null; renderSide(); draw();
+  }
+  drag=null;
+});
 cv.addEventListener('click', e=>{ if((mode!=='draw'&&mode!=='draw_duct')||e.detail>1) return; const [mx,my]=rel(e);
   const wp=s2w(mx,my); draft.push(mode==='draw_duct' ? ductNextPoint(wp) : wp); draw(); });
 cv.addEventListener('dblclick', e=>{ if(mode==='draw'){ e.preventDefault(); finishDraw(); } else if(mode==='draw_duct'){ e.preventDefault(); finishDuctDraw(); } });
@@ -1943,6 +2010,19 @@ document.getElementById('bRunCalc').onclick=async()=>{
           +'Make sure this was opened via "python3 loadcalc.py parse ..." and that terminal is still running, '
           +'then reload this page at its http://127.0.0.1:PORT address.\n'+e.message, true);
   } finally { btn.disabled=false; }
+};
+
+document.getElementById('bExportDxf').onclick=async()=>{
+  const btn=document.getElementById('bExportDxf'), payload=buildPayload(), orig=btn.textContent;
+  btn.disabled=true; btn.textContent='Exporting…';
+  try{
+    const data=await postJson('/api/export_dxf',payload);
+    btn.textContent='Exported ✓';
+    showToast('Wrote '+data.files.join(', '));
+  }catch(e){
+    btn.textContent=orig;
+    showToast('Could not export DXF: '+e.message, true);
+  } finally { btn.disabled=false; setTimeout(()=>btn.textContent=orig,1500); }
 };
 
 // Unsaved-changes guard: compare the current state against a snapshot taken at

@@ -26,9 +26,9 @@ markets, the commercial/Florida value wins and the other case is flagged.
 
 ---
 
-## Integration Target — the Adicot app app
+## Integration Target — the existing Adicot app
 
-**Built standalone, destined to become a tab in the existing Adicot app Flask
+**Built standalone, destined to become a tab in the existing Adicot Flask
 app.** That app already owns everything around the load calc — Wix CMS job data,
 Google Drive, QuickBooks, HTTP auth, per-job JSON storage, and the ReportLab
 deliverables. We build and prove the parser + RTS engine on their own (fast, no

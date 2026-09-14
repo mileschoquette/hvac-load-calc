@@ -193,7 +193,7 @@ def build_room_polygons(walls: list[dict], px_per_ft: float,
 
     # Seal openings with the robust collinear-gap closer (closes every
     # opening-width gap incl. perimeter). The small residual over-split
-    # (Sample A 22 vs 19) is review-UI cleanup.
+    # (Sample A: 22 vs 19) is review-UI cleanup.
     if recognize_doors:
         walls = walls + close_wall_gaps(walls, px_per_ft)
 

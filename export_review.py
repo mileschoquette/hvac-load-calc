@@ -2,7 +2,7 @@
 rooms over the rendered floor plan. Open the file in a browser to add / delete /
 move / resize / relabel rooms with live area readouts.
 
-    python3 export_review.py "sample_drawings/Sample A plan (MECH).pdf" 18.0 [min_len] [page]
+    python3 export_review.py "sample_drawings/your-plan.pdf" 18.0 [min_len] [page]
 """
 import base64
 import glob
