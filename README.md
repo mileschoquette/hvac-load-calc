@@ -61,3 +61,13 @@ for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done
 The `RTS *.xls` workbooks in the repo root are ASHRAE's own published example
 spreadsheets, included because seven of the test files read their expected values
 directly out of the sheets. They remain ASHRAE copyright.
+
+## License
+
+MIT, see `LICENSE`.
+
+That covers the code in this repo. It does not cover the two `RTS *.xls`
+workbooks in the root, which are ASHRAE's published example spreadsheets and
+remain ASHRAE copyright. They are included because the test suite reads its
+expected values out of them. If you redistribute this, that carve-out travels
+with it.
