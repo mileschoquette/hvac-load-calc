@@ -122,6 +122,7 @@
     <button id="bSave" title="Save the current rooms/ducts/settings to rooms_edited.json">Save JSON</button>
     <button id="bRunCalc" class="primary" title="Run the load calculation and generate the report">▶ Run Load Calc</button>
     <button id="bExportDxf" title="Export ductwork to a DXF file per floor, for xref into AutoCAD">Export DXF</button>
+    <span class="stat" id="autosaveStat" title="Autosaves to &lt;project&gt;.autosave.json every 5 minutes. Save JSON still owns the real project file."></span>
     <span class="bar-sep"></span>
     <span class="sp"></span>
     <span class="ruler-stat" id="rulerStat"></span>
@@ -1002,7 +1003,11 @@ function renderSide(){
        +'<button class="tab'+(tab==='ducts'?' on':'')+'" data-tab="ducts">Ducts</button>'
        +'<button class="tab'+(tab==='proj'?' on':'')+'" data-tab="proj">Project / Weather</button></div>';
   h += (tab==='rooms') ? roomsPanel() : (tab==='con') ? conPanel() : (tab==='ducts') ? ductsPanel() : projectPanel();
+  // innerHTML rebuilds the scrolling panels, so carry their scroll over unless the tab changed
+  const keep=s.dataset.tab===tab ? [...s.querySelectorAll('.selblock,.listblock')].map(e=>e.scrollTop) : [];
+  s.dataset.tab=tab;
   s.innerHTML=h;
+  s.querySelectorAll('.selblock,.listblock').forEach((e,i)=>e.scrollTop=keep[i]||0);
   s.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ tab=b.dataset.tab; paintCat=null; activeType=null; hoverEdge=null; cv.classList.remove('paint'); setMode('select'); renderSide(); draw(); });
   if(tab==='rooms') wireRooms(); else if(tab==='con') wireCon(); else if(tab==='ducts') wireDucts(); else wireProject();
 }
@@ -2025,11 +2030,48 @@ document.getElementById('bExportDxf').onclick=async()=>{
   } finally { btn.disabled=false; setTimeout(()=>btn.textContent=orig,1500); }
 };
 
+// Autosave: every AUTOSAVE_MS, POST the current payload to <project>.autosave.json.
+// That is a SEPARATE file from the one Save JSON writes, on purpose. A snapshot
+// taken mid-edit must never be able to replace a save the user chose to make.
+// Which is also why this tracks its own baseline and leaves lastSavedJSON alone:
+// the real project file is still stale after an autosave, so the beforeunload
+// warning below has to keep firing.
+const AUTOSAVE_MS = 5*60*1000;
+let lastAutosavedJSON = null, autosaveTimer = null;
+async function autosaveTick(){
+  // Never snapshot mid-drag: buildPayload() reads live geometry, so a tick
+  // landing between mousedown and mouseup captures a half-moved polygon. Skip
+  // while a calc or DXF export is in flight too, because the server is
+  // single-threaded and the POST would just block behind it (those two buttons
+  // disable themselves for the duration, so their state is the flag).
+  if(drag) return;
+  if(document.getElementById('bRunCalc').disabled) return;
+  if(document.getElementById('bExportDxf').disabled) return;
+  const payload=buildPayload(), snap=JSON.stringify(payload);
+  if(snap===lastAutosavedJSON) return;
+  try{
+    await postJson('/api/autosave', payload);
+    lastAutosavedJSON=snap;
+    document.getElementById('autosaveStat').textContent =
+      'Autosaved '+new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  }catch(e){
+    // Stop after one failure rather than retrying into a dead server all day,
+    // and say so loudly. Silent autosave that isn't running is worse than none.
+    clearInterval(autosaveTimer); autosaveTimer=null;
+    document.getElementById('autosaveStat').textContent='Autosave off';
+    showToast('Autosave stopped: could not reach the local server, so your work is NOT '
+      +'being saved automatically. Use Save JSON, and check that the terminal running '
+      +'"python3 loadcalc.py ..." is still alive.\n'+e.message, true);
+  }
+}
+
 // Unsaved-changes guard: compare the current state against a snapshot taken at
 // load and refreshed on every successful Save/Run Load Calc (including the
 // download fallback — the user has the file at that point even if the server
-// was unreachable). If they differ, warn before the tab closes/navigates away,
-// since nothing here auto-saves.
+// was unreachable). If they differ, warn before the tab closes/navigates away.
+// Autosave above deliberately does NOT refresh this snapshot: it writes a
+// separate .autosave.json, so unsaved work is still unsaved as far as the
+// project file is concerned, and the user needs to be told that.
 window.addEventListener('beforeunload', e=>{
   if(JSON.stringify(buildPayload())!==lastSavedJSON){ e.preventDefault(); e.returnValue=''; }
 });
@@ -2049,4 +2091,6 @@ backfillVentRates();
 renderSide();
 fitWhenReady();
 lastSavedJSON = JSON.stringify(buildPayload());   // baseline — resumed edits count as "saved"
+lastAutosavedJSON = lastSavedJSON;
+autosaveTimer = setInterval(autosaveTick, AUTOSAVE_MS);
 </script></body></html>

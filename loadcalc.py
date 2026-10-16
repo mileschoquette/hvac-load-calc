@@ -187,6 +187,15 @@ def _merged_types(review):
     return {**tj, "project_settings": merged_ps}
 
 
+def _write_json(path, obj):
+    """Write JSON atomically. Written straight to the real path, a crash or a
+    full disk mid-write truncates the project's only copy. Autosave now rewrites
+    every few minutes, so that window comes up 12x an hour instead of never."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2))
+    tmp.replace(path)
+
+
 def _run_calc(review):
     """Shared by `loadcalc.py calc` and the review UI's "Run Load Calc" button:
     review packet -> compute_building -> results.html."""
@@ -346,8 +355,19 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         # and carried through every buildPayload()) instead of a fixed rooms_edited.json —
         # so different projects in this folder don't keep clobbering each other's save.
         stem = Path(review["pdf_stem"]).name if review.get("pdf_stem") else None
+        if self.path == "/api/autosave":
+            # Deliberately never writes <stem>.json. That file belongs to the
+            # Save JSON button, so a five-minute snapshot of half-finished work
+            # can't replace a deliberate save. duct_plan_png is dropped because
+            # only /api/calc needs it, and at 3x canvas scale it's what left a
+            # 1.6 MB rooms_edited.json on disk.
+            review.pop("duct_plan_png", None)
+            name = f"{stem}.autosave.json" if stem else "rooms_edited.autosave.json"
+            _write_json(ROOT / name, review)
+            self._json({"ok": True, "filename": name})
+            return
         out_name = f"{stem}.json" if stem else "rooms_edited.json"
-        (ROOT / out_name).write_text(json.dumps(review, indent=2))
+        _write_json(ROOT / out_name, review)
         if self.path == "/api/save":
             self._json({"ok": True, "filename": out_name})
         elif self.path == "/api/calc":
