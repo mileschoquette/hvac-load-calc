@@ -1003,7 +1003,11 @@ function renderSide(){
        +'<button class="tab'+(tab==='ducts'?' on':'')+'" data-tab="ducts">Ducts</button>'
        +'<button class="tab'+(tab==='proj'?' on':'')+'" data-tab="proj">Project / Weather</button></div>';
   h += (tab==='rooms') ? roomsPanel() : (tab==='con') ? conPanel() : (tab==='ducts') ? ductsPanel() : projectPanel();
+  // innerHTML rebuilds the scrolling panels, so carry their scroll over unless the tab changed
+  const keep=s.dataset.tab===tab ? [...s.querySelectorAll('.selblock,.listblock')].map(e=>e.scrollTop) : [];
+  s.dataset.tab=tab;
   s.innerHTML=h;
+  s.querySelectorAll('.selblock,.listblock').forEach((e,i)=>e.scrollTop=keep[i]||0);
   s.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ tab=b.dataset.tab; paintCat=null; activeType=null; hoverEdge=null; cv.classList.remove('paint'); setMode('select'); renderSide(); draw(); });
   if(tab==='rooms') wireRooms(); else if(tab==='con') wireCon(); else if(tab==='ducts') wireDucts(); else wireProject();
 }
